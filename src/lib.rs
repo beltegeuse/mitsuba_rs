@@ -65,6 +65,12 @@ impl Value {
             _ => panic!("Wrong type {:?} (as_bool)", self),
         }
     }
+    pub fn as_spectrum(self) -> Spectrum {
+        match self {
+            Value::Spectrum(s) => s,
+            _ => panic!("Wrong type {:?} (as_spectrum)", self),
+        }
+    }
 }
 
 fn found_attrib(attrs: &Vec<xml::attribute::OwnedAttribute>, name: &str) -> Option<String> {
@@ -311,7 +317,7 @@ impl BSDF {
                 };
                 Some(BSDF::Diffuse { reflectance })
             }
-            // "conductor" | "roughconductor" => Some(BSDF::Conductor),
+
             "dielectric" | "roughdielectric" | "thindielectric" => {
                 let mut map = values(event, true);
                 let distribution = if bsdf_type == "roughdielectric" {
@@ -343,7 +349,12 @@ impl BSDF {
                     thin,
                 })
             }
-            _ => None,
+            "conductor" | "roughconductor" => {
+                println!("[WARN] Ignoring material of type {}", bsdf_type);
+                skipping_entry(event);
+                None
+            }
+            _ => panic!("Unsupported material {}", bsdf_type),
         }
     }
 }
@@ -357,6 +368,61 @@ impl Texture {
         let mut map = values(events, true);
         let filename = map.remove("filename").unwrap().as_string();
         Texture { filename }
+    }
+}
+
+#[derive(Debug)]
+pub enum Emitter {
+    Area { radiance: Spectrum },
+}
+impl Emitter {
+    pub fn parse<R: Read>(events: &mut Events<R>, emitter_type: &str) -> Option<Self> {
+        match emitter_type {
+            "area" => {
+                let mut map = values(events, true);
+                let radiance = map.remove("radiance").unwrap().as_spectrum();
+                Some(Emitter::Area { radiance })
+            }
+            _ => {
+                println!("[WARN] Ignoring {} emitter type", emitter_type);
+                skipping_entry(events);
+                None
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum Shape {
+    Serialized {
+        filename: String,
+        shape_index: u32,
+        bsdfs: Option<BSDF>,
+        transform: Option<Transform>,
+        emitter: Option<Emitter>,
+    },
+}
+impl Shape {
+    pub fn parse<R: Read>(events: &mut Events<R>, shape_type: &str, scene: &Scene) -> Option<Self> {
+        unimplemented!();
+        // // FIXME: Can be object or references
+        // //  if there are references, we need to handle them
+        // //  differentely.
+        // let mut bsdf = None;
+        // let mut transform = None;
+        // let mut emitter = None;
+
+        // match shape_type {
+        //     "serialized" => {
+        //         skipping_entry(events);
+        //         None
+        //     }
+        //     _ => {
+        //         println!("[WARN] Ignoring {} shape type", shape_type);
+        //         skipping_entry(events);
+        //         None
+        //     }
+        // }
     }
 }
 
@@ -443,6 +509,7 @@ pub struct Scene {
     bsdfs: HashMap<String, BSDF>,
     textures: HashMap<String, Texture>,
     sensors: Vec<Sensor>,
+    emitters: Vec<Emitter>,
 }
 
 pub fn mitsuba_print(file: &str) -> Scene {
@@ -455,6 +522,7 @@ pub fn mitsuba_print(file: &str) -> Scene {
         bsdfs: HashMap::new(),
         textures: HashMap::new(),
         sensors: Vec::new(),
+        emitters: Vec::new(),
     };
 
     let mut iter = parser.into_iter();
@@ -488,7 +556,22 @@ pub fn mitsuba_print(file: &str) -> Scene {
                     let sensor = Sensor::parse(&mut iter, &sensor_type);
                     scene.sensors.push(sensor);
                 }
-                _ => (),
+                "emitter" => {
+                    let emitter_type = found_attrib(&attributes, "type").unwrap();
+                    let emitter = Emitter::parse(&mut iter, &emitter_type);
+                    if let Some(e) = emitter {
+                        scene.emitters.push(e);
+                    }
+                }
+                "default" => {
+                    println!("[WARN] default are ignored");
+                    skipping_entry(&mut iter);
+                }
+                "scene" => {}
+                "shape" | "integrator" => {
+                    skipping_entry(&mut iter);
+                }
+                _ => panic!("Unsupported primitive type {} {:?}", name, attributes),
             },
             Ok(XmlEvent::EndElement { .. }) => {
                 // TODO: Might want to check the type in case...
