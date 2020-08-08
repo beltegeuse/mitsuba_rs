@@ -157,6 +157,33 @@ fn found_attrib(attrs: &Vec<xml::attribute::OwnedAttribute>, name: &str) -> Opti
     }
     None
 }
+fn found_attrib_or(
+    attrs: &Vec<xml::attribute::OwnedAttribute>,
+    name: &str,
+    default: &str,
+) -> String {
+    match found_attrib(attrs, name) {
+        Some(v) => v,
+        None => default.to_string(),
+    }
+}
+fn found_attrib_vec(
+    attrs: &Vec<xml::attribute::OwnedAttribute>,
+    name: &str,
+) -> Option<Vector3<f32>> {
+    match found_attrib(attrs, name) {
+        Some(v) => {
+            let v = v
+                .split(",")
+                .into_iter()
+                .map(|v| v.trim().parse::<f32>().unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(v.len(), 3);
+            Some(Vector3::new(v[0], v[1], v[2]))
+        }
+        None => None,
+    }
+}
 
 fn skipping_entry<R: Read>(events: &mut Events<R>) {
     // We will skip the entry
@@ -575,9 +602,138 @@ impl Film {
 pub struct Transform(Matrix4<f32>);
 impl Transform {
     pub fn parse<R: Read>(events: &mut Events<R>) -> Self {
-        skipping_entry(events);
-        println!("WARN: Transform parsing is not implemented");
-        Transform(Matrix4::one())
+        let mut trans = Matrix4::one();
+        let mut opened = 1;
+        for e in events {
+            match e {
+                Ok(XmlEvent::StartElement {
+                    name, attributes, ..
+                }) => match name.local_name.as_str() {
+                    "translate" => {
+                        let x = found_attrib_or(&attributes, "x", "0.0")
+                            .parse::<f32>()
+                            .unwrap();
+                        let y = found_attrib_or(&attributes, "y", "0.0")
+                            .parse::<f32>()
+                            .unwrap();
+                        let z = found_attrib_or(&attributes, "z", "0.0")
+                            .parse::<f32>()
+                            .unwrap();
+                        trans = trans * Matrix4::from_translation(Vector3::new(x, y, z));
+                        opened += 1;
+                    }
+                    "scale" => {
+                        let value = found_attrib(&attributes, "value");
+                        match value {
+                            Some(v) => {
+                                let v = v.parse::<f32>().unwrap();
+                                trans = trans * Matrix4::from_scale(v);
+                            }
+                            None => {
+                                let x = found_attrib_or(&attributes, "x", "1.0")
+                                    .parse::<f32>()
+                                    .unwrap();
+                                let y = found_attrib_or(&attributes, "y", "1.0")
+                                    .parse::<f32>()
+                                    .unwrap();
+                                let z = found_attrib_or(&attributes, "z", "1.0")
+                                    .parse::<f32>()
+                                    .unwrap();
+
+                                trans = trans * Matrix4::from_nonuniform_scale(x, y, z);
+                            }
+                        }
+                        opened += 1;
+                    }
+                    "rotate" => {
+                        let x = found_attrib_or(&attributes, "x", "0.0")
+                            .parse::<f32>()
+                            .unwrap();
+                        let y = found_attrib_or(&attributes, "y", "0.0")
+                            .parse::<f32>()
+                            .unwrap();
+                        let z = found_attrib_or(&attributes, "z", "0.0")
+                            .parse::<f32>()
+                            .unwrap();
+                        let angle = found_attrib(&attributes, "angle")
+                            .unwrap()
+                            .parse::<f32>()
+                            .unwrap();
+                        let axis = Vector3::new(x, y, z);
+
+                        trans = trans * Matrix4::from_axis_angle(axis, Deg(angle));
+                        opened += 1;
+                    }
+                    "matrix" => {
+                        let values = found_attrib(&attributes, "value").unwrap();
+                        let values = values
+                            .split(" ")
+                            .into_iter()
+                            .map(|v| v.parse::<f32>().unwrap())
+                            .collect::<Vec<_>>();
+
+                        let m00 = values[0];
+                        let m01 = values[1];
+                        let m02 = values[2];
+                        let m03 = values[3];
+                        let m10 = values[4];
+                        let m11 = values[5];
+                        let m12 = values[6];
+                        let m13 = values[7];
+                        let m20 = values[8];
+                        let m21 = values[9];
+                        let m22 = values[10];
+                        let m23 = values[11];
+                        let m30 = values[12];
+                        let m31 = values[13];
+                        let m32 = values[14];
+                        let m33 = values[15];
+                        let matrix = Matrix4::new(
+                            m00, m01, m02, m03, m10, m11, m12, m13, m20, m21, m22, m23, m30, m31,
+                            m32, m33,
+                        );
+                        //#[rustfmt::skip]
+                        trans = trans * matrix;
+                        opened += 1;
+                    }
+                    "lookat" => {
+                        let origin = found_attrib_vec(&attributes, "origin").unwrap();
+                        let target = found_attrib_vec(&attributes, "target").unwrap();
+                        let up = found_attrib_vec(&attributes, "up").unwrap();
+
+                        // Conversion
+                        let dir = (target - origin).normalize();
+                        let left = -dir.cross(up.normalize()).normalize();
+                        let new_up = dir.cross(left);
+
+                        use cgmath::Transform;
+                        let matrix = Matrix4::new(
+                            left.x, left.y, left.z, 0.0, new_up.x, new_up.y, new_up.z, 0.0, dir.x,
+                            dir.y, dir.z, 0.0, origin.x, origin.y, origin.z, 1.0,
+                        )
+                        .inverse_transform()
+                        .unwrap();
+
+                        trans = trans * matrix;
+                        opened += 1;
+                    }
+                    _ => panic!("uncover case {:?} for matrix op", name),
+                },
+                Ok(XmlEvent::EndElement { .. }) => {
+                    if opened == 1 {
+                        break;
+                    }
+                    opened -= 1;
+                }
+                Ok(XmlEvent::Whitespace(_)) => {}
+                Err(e) => {
+                    panic!("Parse values Error: {}", e);
+                }
+                _ => panic!("Transform default {:?}", e),
+            }
+        }
+
+        Transform(trans)
     }
 }
 
@@ -608,7 +764,10 @@ impl Sensor {
             match t {
                 "film" => film = Some(Film::parse(events)),
                 "transform" => to_world = Some(Transform::parse(events)),
-                "sampler" => (skipping_entry(events)),
+                "sampler" => {
+                    println!("Skipping sampler information");
+                    skipping_entry(events);
+                }
                 _ => panic!("Unexpected token!"),
             }
             true
@@ -733,15 +892,44 @@ pub fn mitsuba_print(file: &str) -> Scene {
 
 #[cfg(test)]
 mod tests {
+    fn print_scene(scene: crate::Scene) {
+        println!("BSDFs");
+        for (k, v) in &scene.bsdfs {
+            println!(" - {} = {:?}", k, v);
+        }
+        println!("Textures");
+        for (k, v) in &scene.textures {
+            println!(" - {} = {:?}", k, v);
+        }
+        println!("Shapes");
+        for (k, v) in &scene.shapes {
+            println!(" - {} = {:?}", k, v);
+        }
+        println!("Sensor");
+        for v in &scene.sensors {
+            println!(" - {:?}", v);
+        }
+        println!("Emitters");
+        for v in &scene.emitters {
+            println!(" - {:?}", v);
+        }
+    }
+
     #[test]
     fn bookshelf() {
         let s = "./data/bookshelf.xml";
-        println!("{:?})", crate::mitsuba_print(s));
+        print_scene(crate::mitsuba_print(s));
+    }
+
+    #[test]
+    fn aquarium() {
+        let s = "./data/aquarium.xml";
+        print_scene(crate::mitsuba_print(s));
     }
 
     #[test]
     fn bsdf() {
         let s = "./data/bsdf.xml";
-        println!("{:?})", crate::mitsuba_print(s));
+        print_scene(crate::mitsuba_print(s));
     }
 }
