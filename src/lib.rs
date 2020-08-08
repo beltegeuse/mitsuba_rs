@@ -1,6 +1,7 @@
 extern crate cgmath;
 extern crate xml;
-
+#[macro_use]
+extern crate lazy_static;
 use std::fs::File;
 use std::io::BufReader;
 
@@ -9,7 +10,37 @@ use std::collections::HashMap;
 use std::io::Read;
 use xml::reader::{EventReader, Events, XmlEvent};
 
-#[derive(Debug)]
+lazy_static! {
+    static ref IOR_DATA: HashMap<String, f32> = {
+        let mut m = HashMap::new();
+        m.insert("vacuum".to_string(), 1.0);
+        m.insert("helium".to_string(), 1.000036);
+        m.insert("hydrogen".to_string(), 1.000132);
+        m.insert("air".to_string(), 1.000277);
+        m.insert("carbon dioxide".to_string(), 1.00045);
+        m.insert("water".to_string(), 1.3330);
+        m.insert("acetone".to_string(), 1.36);
+        m.insert("ethanol".to_string(), 1.361);
+        m.insert("carbon tetrachloride".to_string(), 1.461);
+        m.insert("glycerol".to_string(), 1.4729);
+        m.insert("benzene".to_string(), 1.501);
+        m.insert("silicone oil".to_string(), 1.52045);
+        m.insert("bromine".to_string(), 1.661);
+        m.insert("water ice".to_string(), 1.31);
+        m.insert("fused quartz".to_string(), 1.458);
+        m.insert("pyrex".to_string(), 1.470);
+        m.insert("acrylic glass".to_string(), 1.49);
+        m.insert("polypropylene".to_string(), 1.49);
+        m.insert("bk7".to_string(), 1.5046);
+        m.insert("sodium chloride".to_string(), 1.544);
+        m.insert("amber".to_string(), 1.55);
+        m.insert("pet".to_string(), 1.5750);
+        m.insert("diamond".to_string(), 2.419);
+        m
+    };
+}
+
+#[derive(Debug, Clone)]
 pub struct Spectrum {
     pub value: String,
 }
@@ -30,10 +61,17 @@ impl Spectrum {
     // }
 }
 
+#[derive(Debug, PartialEq, Clone)]
+pub enum BSDFColor<T> {
+    Texture(Texture),
+    Constant(T),
+}
+type BSDFColorSpectrum = BSDFColor<Spectrum>;
+type BSDFColorFloat = BSDFColor<f32>;
+
 #[derive(Debug)]
 pub enum Value {
     Float(f32),
-    Texture(String),
     Spectrum(Spectrum),
     String(String),
     Integer(i32),
@@ -43,7 +81,7 @@ pub enum Value {
 impl Value {
     pub fn as_string(self) -> String {
         match self {
-            Value::String(s) | Value::Texture(s) => s,
+            Value::Ref(s) | Value::String(s) => s,
             _ => panic!("Wrong type {:?} (as_string)", self),
         }
     }
@@ -69,6 +107,44 @@ impl Value {
         match self {
             Value::Spectrum(s) => s,
             _ => panic!("Wrong type {:?} (as_spectrum)", self),
+        }
+    }
+
+    // Check if it is a ref
+    pub fn is_ref(&self) -> bool {
+        match self {
+            Value::Ref(_) => true,
+            _ => false,
+        }
+    }
+
+    // Conversions
+    pub fn as_bsdf_color_spec(self, scene: &Scene) -> BSDFColorSpectrum {
+        match self {
+            Value::Spectrum(v) => BSDFColorSpectrum::Constant(v),
+            Value::Ref(v) => {
+                let tex = scene.textures.get(&v).unwrap();
+                BSDFColorSpectrum::Texture(tex.clone())
+            }
+            _ => panic!("Wrong type {:?} (as_bsdf_color_spec)", self),
+        }
+    }
+    pub fn as_bsdf_color_f32(self, scene: &Scene) -> BSDFColorFloat {
+        match self {
+            Value::Float(v) => BSDFColorFloat::Constant(v),
+            Value::Ref(v) => {
+                let tex = scene.textures.get(&v).unwrap();
+                BSDFColorFloat::Texture(tex.clone())
+            }
+            _ => panic!("Wrong type {:?} (as_bsdf_color_f32)", self),
+        }
+    }
+
+    fn as_ior(self) -> f32 {
+        match self {
+            Value::Float(v) => v,
+            Value::String(v) => *IOR_DATA.get(&v).unwrap(),
+            _ => panic!("Wrong type {:?} (as_ior)", self),
         }
     }
 }
@@ -111,7 +187,7 @@ fn values_fn<R: Read, F>(
     mut other: F,
 ) -> HashMap<String, Value>
 where
-    F: FnMut(&mut Events<R>, &str) -> bool,
+    F: FnMut(&mut Events<R>, &str, HashMap<String, String>) -> bool,
 {
     let mut map = HashMap::new();
     let mut opened = false;
@@ -147,12 +223,6 @@ where
                     map.insert(name, Value::Boolean(value));
                     opened = true;
                 }
-                "texture" => {
-                    let name = found_attrib(&attributes, "name").unwrap();
-                    let value = found_attrib(&attributes, "value").unwrap();
-                    map.insert(name, Value::Texture(value));
-                    opened = true;
-                }
                 "spectrum" => {
                     let name = found_attrib(&attributes, "name").unwrap();
                     let value = found_attrib(&attributes, "value").unwrap();
@@ -178,7 +248,12 @@ where
                     opened = true;
                 }
                 _ => {
-                    let captured = other(iter, &name.local_name);
+                    // TODO: Might be inefficient
+                    let map = attributes
+                        .iter()
+                        .map(|a| (a.name.local_name.clone(), a.value.clone()))
+                        .collect();
+                    let captured = other(iter, &name.local_name, map);
                     if !captured {
                         if strict {
                             panic!("{:?} encounter when parsing values", name)
@@ -207,7 +282,7 @@ where
 }
 
 fn values<R: Read>(events: &mut Events<R>, strict: bool) -> HashMap<String, Value> {
-    let f = |_: &mut Events<R>, _: &str| false;
+    let f = |_: &mut Events<R>, _: &str, _: HashMap<String, String>| false;
     values_fn(events, strict, f)
 }
 
@@ -218,49 +293,60 @@ fn read_value(m: &mut HashMap<String, Value>, n: &str, d: Value) -> Value {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
+pub enum Alpha {
+    Isotropic(BSDFColorFloat),
+    Anisotropic {
+        u: BSDFColorFloat,
+        v: BSDFColorFloat,
+    },
+}
+
+#[derive(Debug, Clone)]
 pub struct Distribution {
     pub distribution: String,
-    pub alpha_u: f32,
-    pub alpha_v: f32,
+    pub alpha: Alpha,
 }
 impl Distribution {
-    fn parse(map: &mut HashMap<String, Value>) -> Self {
+    fn parse(map: &mut HashMap<String, Value>, scene: &Scene) -> Self {
         let distribution =
             read_value(map, "distribution", Value::String("beckmann".to_string())).as_string();
-        let (alpha_u, alpha_v) = {
+        let alpha = {
             let is_alpha = map.get("alpha").is_some();
             if is_alpha {
-                let alpha = map.remove("alpha").unwrap().as_float();
-                (alpha, alpha)
+                let alpha = map.remove("alpha").unwrap().as_bsdf_color_f32(scene);
+                Alpha::Isotropic(alpha)
             } else {
-                let alpha_u = read_value(map, "alpha_u", Value::Float(0.1)).as_float();
-                let alpha_v = read_value(map, "alpha_v", Value::Float(0.1)).as_float();
-                (alpha_u, alpha_v)
+                let u = read_value(map, "alpha_u", Value::Float(0.1)).as_bsdf_color_f32(scene);
+                let v = read_value(map, "alpha_v", Value::Float(0.1)).as_bsdf_color_f32(scene);
+                if u == v {
+                    Alpha::Isotropic(u)
+                } else {
+                    Alpha::Anisotropic { u, v }
+                }
             }
         };
         Self {
             distribution,
-            alpha_u,
-            alpha_v,
+            alpha,
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum BSDF {
     Phong {
-        exponent: Value,
-        specular_reflectance: Value,
-        diffuse_reflectance: Value,
+        exponent: BSDFColorFloat,
+        specular_reflectance: BSDFColorSpectrum,
+        diffuse_reflectance: BSDFColorSpectrum,
     },
     Diffuse {
-        reflectance: Value,
+        reflectance: BSDFColorSpectrum,
     },
     Roughtdiffuse {
-        relectance: Value,     // s(0.5)
-        alpha: Value,          // s(0.2)
-        use_fast_approx: bool, // false
+        relectance: BSDFColorSpectrum, // s(0.5)
+        alpha: BSDFColorSpectrum,      // s(0.2)
+        use_fast_approx: bool,         // false
     },
     Conductor {
         distribution: Option<Distribution>,
@@ -268,41 +354,44 @@ pub enum BSDF {
         eta: Spectrum,
         k: Spectrum,
         // Other
-        ext_eta: Value,              // Air
-        specular_reflectance: Value, // s(1.0)
+        ext_eta: f32,                            // Air
+        specular_reflectance: BSDFColorSpectrum, // s(1.0)
     },
     Dielectric {
         distribution: Option<Distribution>,
-        int_ior: Value,                // intIOR "bk7"
-        ext_ior: Value,                // extIOR "air"
-        specular_reflectance: Value,   // s(1.0)
-        specular_transmittance: Value, // s(1.0)
-        thin: bool,                    // to handle both objects
+        int_ior: f32,                              // intIOR "bk7"
+        ext_ior: f32,                              // extIOR "air"
+        specular_reflectance: BSDFColorSpectrum,   // s(1.0)
+        specular_transmittance: BSDFColorSpectrum, // s(1.0)
+        thin: bool,                                // to handle both objects
     },
 }
 
 impl BSDF {
     pub fn default() -> Self {
         BSDF::Diffuse {
-            reflectance: Value::Spectrum(Spectrum::from_f32(0.8)),
+            reflectance: BSDFColorSpectrum::Constant(Spectrum::from_f32(0.8)),
         }
     }
-    pub fn parse<R: Read>(event: &mut Events<R>, bsdf_type: &str) -> Option<Self> {
+    pub fn parse<R: Read>(event: &mut Events<R>, bsdf_type: &str, scene: &Scene) -> Option<Self> {
         match bsdf_type {
             "phong" => {
                 let mut values = values(event, true);
                 let exponent = match values.remove("exponent") {
                     Some(v) => v,
                     None => Value::Float(30.0),
-                };
+                }
+                .as_bsdf_color_f32(scene);
                 let specular_reflectance = match values.remove("specularReflectance") {
                     Some(v) => v,
                     None => Value::Spectrum(Spectrum::from_f32(0.2)),
-                };
+                }
+                .as_bsdf_color_spec(scene);
                 let diffuse_reflectance = match values.remove("diffuseReflectance") {
                     Some(v) => v,
                     None => Value::Spectrum(Spectrum::from_f32(0.5)),
-                };
+                }
+                .as_bsdf_color_spec(scene);
                 Some(BSDF::Phong {
                     exponent,
                     specular_reflectance,
@@ -314,31 +403,36 @@ impl BSDF {
                 let reflectance = match values.remove("reflectance") {
                     Some(v) => v,
                     None => Value::Spectrum(Spectrum::from_f32(0.5)),
-                };
+                }
+                .as_bsdf_color_spec(scene);
                 Some(BSDF::Diffuse { reflectance })
             }
 
             "dielectric" | "roughdielectric" | "thindielectric" => {
                 let mut map = values(event, true);
                 let distribution = if bsdf_type == "roughdielectric" {
-                    Some(Distribution::parse(&mut map))
+                    Some(Distribution::parse(&mut map, scene))
                 } else {
                     None
                 };
                 let thin = bsdf_type == "thindielectric";
 
-                let int_ior = read_value(&mut map, "intIOR", Value::String("bk7".to_string()));
-                let ext_ior = read_value(&mut map, "extIOR", Value::String("air".to_string()));
+                let int_ior =
+                    read_value(&mut map, "intIOR", Value::String("bk7".to_string())).as_ior();
+                let ext_ior =
+                    read_value(&mut map, "extIOR", Value::String("air".to_string())).as_ior();
                 let specular_reflectance = read_value(
                     &mut map,
                     "specularReflectance",
                     Value::Spectrum(Spectrum::from_f32(1.0)),
-                );
+                )
+                .as_bsdf_color_spec(scene);
                 let specular_transmittance = read_value(
                     &mut map,
                     "specularTransmittance",
                     Value::Spectrum(Spectrum::from_f32(1.0)),
-                );
+                )
+                .as_bsdf_color_spec(scene);
 
                 Some(BSDF::Dielectric {
                     distribution,
@@ -359,7 +453,7 @@ impl BSDF {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Texture {
     filename: String,
 }
@@ -397,32 +491,69 @@ pub enum Shape {
     Serialized {
         filename: String,
         shape_index: u32,
-        bsdfs: Option<BSDF>,
-        transform: Option<Transform>,
+        bsdf: Option<BSDF>,
+        to_world: Option<Transform>,
         emitter: Option<Emitter>,
     },
 }
 impl Shape {
     pub fn parse<R: Read>(events: &mut Events<R>, shape_type: &str, scene: &Scene) -> Option<Self> {
-        unimplemented!();
-        // // FIXME: Can be object or references
-        // //  if there are references, we need to handle them
-        // //  differentely.
-        // let mut bsdf = None;
-        // let mut transform = None;
-        // let mut emitter = None;
+        // FIXME: Can be object or references
+        //  if there are references, we need to handle them
+        //  differentely.
+        let mut bsdf = None;
+        let mut to_world = None;
+        let mut emitter = None;
 
-        // match shape_type {
-        //     "serialized" => {
-        //         skipping_entry(events);
-        //         None
-        //     }
-        //     _ => {
-        //         println!("[WARN] Ignoring {} shape type", shape_type);
-        //         skipping_entry(events);
-        //         None
-        //     }
-        // }
+        let f = |events: &mut Events<R>, t: &str, attrs: HashMap<String, String>| -> bool {
+            match t {
+                "bsdf" => {
+                    let bsdf_type = attrs.get("type").unwrap();
+                    // FIXME: The unwrap can be catastrophic!
+                    bsdf = Some(BSDF::parse(events, bsdf_type, scene).unwrap());
+                }
+                "transform" => to_world = Some(Transform::parse(events)),
+                "emitter" => {
+                    let emitter_type = attrs.get("type").unwrap();
+                    emitter = Emitter::parse(events, emitter_type);
+                }
+                _ => panic!("Unexpected token!"),
+            }
+            true
+        };
+
+        match shape_type {
+            "serialized" => {
+                let mut map = values_fn(events, false, f);
+                let filename = map.remove("filename").unwrap().as_string();
+                let shape_index = map.remove("shapeIndex").unwrap().as_int() as u32;
+
+                // Try to fill things that missing
+                if bsdf.is_none() {
+                    match map.remove("bsdf") {
+                        None => {}
+                        Some(v) => bsdf = Some(scene.bsdfs.get(&v.as_string()).unwrap().clone()),
+                    }
+                }
+                if emitter.is_none() {
+                    // TODO: Need to implement ref to emitters
+                    assert!(map.remove("emitter").is_none());
+                }
+
+                Some(Shape::Serialized {
+                    filename,
+                    shape_index,
+                    bsdf,
+                    to_world,
+                    emitter,
+                })
+            }
+            _ => {
+                println!("[WARN] Ignoring {} shape type", shape_type);
+                skipping_entry(events);
+                None
+            }
+        }
     }
 }
 
@@ -473,7 +604,7 @@ impl Sensor {
         // Use closure to initialize these extra stuffs
         let mut film = None;
         let mut to_world = None;
-        let f = |events: &mut Events<R>, t: &str| -> bool {
+        let f = |events: &mut Events<R>, t: &str, _: HashMap<String, String>| -> bool {
             match t {
                 "film" => film = Some(Film::parse(events)),
                 "transform" => to_world = Some(Transform::parse(events)),
@@ -508,6 +639,7 @@ impl Sensor {
 pub struct Scene {
     bsdfs: HashMap<String, BSDF>,
     textures: HashMap<String, Texture>,
+    shapes: HashMap<String, Shape>,
     sensors: Vec<Sensor>,
     emitters: Vec<Emitter>,
 }
@@ -521,6 +653,7 @@ pub fn mitsuba_print(file: &str) -> Scene {
     let mut scene = Scene {
         bsdfs: HashMap::new(),
         textures: HashMap::new(),
+        shapes: HashMap::new(),
         sensors: Vec::new(),
         emitters: Vec::new(),
     };
@@ -539,7 +672,7 @@ pub fn mitsuba_print(file: &str) -> Scene {
                 "bsdf" => {
                     let bsdf_type = found_attrib(&attributes, "type").unwrap();
                     let bsdf_id = found_attrib(&attributes, "id").unwrap();
-                    let bsdf = BSDF::parse(&mut iter, &bsdf_type);
+                    let bsdf = BSDF::parse(&mut iter, &bsdf_type, &scene);
                     let bsdf = match bsdf {
                         Some(v) => v,
                         None => BSDF::default(),
@@ -567,9 +700,21 @@ pub fn mitsuba_print(file: &str) -> Scene {
                     println!("[WARN] default are ignored");
                     skipping_entry(&mut iter);
                 }
-                "scene" => {}
-                "shape" | "integrator" => {
+                "scene" => {
+                    // Nothing to do
+                }
+                "integrator" => {
+                    // We ignoring the integrator
+                    // as for scene parsing, it gives us no information
                     skipping_entry(&mut iter);
+                }
+                "shape" => {
+                    let shape_type = found_attrib(&attributes, "type").unwrap();
+                    let shape_id = found_attrib(&attributes, "id").unwrap();
+                    let shape = Shape::parse(&mut iter, &shape_type, &scene);
+                    if let Some(s) = shape {
+                        scene.shapes.insert(shape_id, s);
+                    }
                 }
                 _ => panic!("Unsupported primitive type {} {:?}", name, attributes),
             },
