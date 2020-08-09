@@ -74,6 +74,8 @@ pub enum Value {
     Float(f32),
     Spectrum(Spectrum),
     String(String),
+    Vector(Vector3<f32>),
+    Point(Point3<f32>),
     Integer(i32),
     Boolean(bool),
     Ref(String),
@@ -107,6 +109,18 @@ impl Value {
         match self {
             Value::Spectrum(s) => s,
             _ => panic!("Wrong type {:?} (as_spectrum)", self),
+        }
+    }
+    pub fn as_vec(self) -> Vector3<f32> {
+        match self {
+            Value::Vector(v) => v,
+            _ => panic!("Wrong type {:?} (as_vec)", self),
+        }
+    }
+    pub fn as_point(self) -> Point3<f32> {
+        match self {
+            Value::Point(v) => v,
+            _ => panic!("Wrong type {:?} (as_point)", self),
         }
     }
 
@@ -275,6 +289,40 @@ where
                             refs.push(value);
                         }
                     };
+                    opened = true;
+                }
+                "vector" => {
+                    let name = found_attrib(&attributes, "name").unwrap();
+                    let x = found_attrib(&attributes, "x")
+                        .unwrap_or("0.0".to_string())
+                        .parse::<f32>()
+                        .unwrap();
+                    let y = found_attrib(&attributes, "y")
+                        .unwrap_or("0.0".to_string())
+                        .parse::<f32>()
+                        .unwrap();
+                    let z = found_attrib(&attributes, "z")
+                        .unwrap_or("0.0".to_string())
+                        .parse::<f32>()
+                        .unwrap();
+                    map.insert(name, Value::Vector(Vector3::new(x, y, z)));
+                    opened = true;
+                }
+                "point" => {
+                    let name = found_attrib(&attributes, "name").unwrap();
+                    let x = found_attrib(&attributes, "x")
+                        .unwrap_or("0.0".to_string())
+                        .parse::<f32>()
+                        .unwrap();
+                    let y = found_attrib(&attributes, "y")
+                        .unwrap_or("0.0".to_string())
+                        .parse::<f32>()
+                        .unwrap();
+                    let z = found_attrib(&attributes, "z")
+                        .unwrap_or("0.0".to_string())
+                        .parse::<f32>()
+                        .unwrap();
+                    map.insert(name, Value::Point(Point3::new(x, y, z)));
                     opened = true;
                 }
                 "string" => {
@@ -598,24 +646,185 @@ impl Texture {
 }
 
 #[derive(Debug)]
+pub struct AreaEmitter {
+    pub radiance: Spectrum,
+    pub sampling_weight: f32, // 1
+}
+
+#[derive(Debug)]
 pub enum Emitter {
-    Area { radiance: Spectrum },
+    // Area light
+    // (kinda special as Mesh will have ref to it)
+    Area(AreaEmitter),
+    // Point light
+    Point {
+        to_world: Transform,
+        position: Point3<f32>,
+        intensity: Spectrum,  // 1
+        sampling_weight: f32, // 1
+    },
+    // Spotlight
+    Spot {
+        to_world: Transform, // Id
+        intensity: Spectrum, // 1
+        cutoff_angle: f32,   // 20 deg
+        beam_width: f32,     // cutoff_angle * 3.0 / 4.0
+        texture: Option<Texture>,
+        sampling_weight: f32, // 1
+    },
+    // Directional
+    Directional {
+        to_world: Transform,     // Id
+        direction: Vector3<f32>, // Mandatory
+        irradiance: Spectrum,    // 1
+        sampling_weight: f32,    // 1
+    },
+    // Collimated
+    Collimated {
+        to_world: Transform,  // Id
+        power: Spectrum,      // 1
+        sampling_weight: f32, // 1
+    },
+    // Constant env map
+    Constant {
+        radiance: Spectrum,   // 1
+        sampling_weight: f32, // 1
+    },
+    // Env map
+    EnvMap {
+        to_world: Transform,  // Id
+        filename: String,     // Mandatory
+        scale: f32,           // 1
+        gamma: Option<f32>,   // Optional (or automatic)
+        cache: Option<bool>,  // Optional (or automatic)
+        sampling_weight: f32, // 1
+    },
 }
 impl Emitter {
-    pub fn parse<R: Read>(events: &mut Events<R>, emitter_type: &str) -> Option<Self> {
-        let (mut map, refs) = values(events, true);
+    pub fn parse<R: Read>(events: &mut Events<R>, emitter_type: &str) -> Self {
+        let mut to_world = Transform(Matrix4::one());
+        // TODO: Texture
+        let f = |events: &mut Events<R>, t: &str, _: HashMap<String, String>| -> bool {
+            match t {
+                "transform" => to_world = Transform::parse(events),
+                _ => panic!("Unexpected token!"),
+            }
+            true
+        };
+
+        let (mut map, refs) = values_fn(events, true, f);
         assert!(refs.is_empty());
 
+        let sampling_weight = read_value(&mut map, "samplingWeight", Value::Float(1.0)).as_float();
         match emitter_type {
             "area" => {
                 let radiance = map.remove("radiance").unwrap().as_spectrum();
-                Some(Emitter::Area { radiance })
+                Emitter::Area(AreaEmitter {
+                    radiance,
+                    sampling_weight,
+                })
+            }
+            "point" => {
+                let position = map.remove("position").unwrap().as_point();
+                let intensity = read_value(
+                    &mut map,
+                    "intensity",
+                    Value::Spectrum(Spectrum::from_f32(1.0)),
+                )
+                .as_spectrum();
+                Emitter::Point {
+                    to_world,
+                    position,
+                    intensity,
+                    sampling_weight,
+                }
+            }
+            "spot" => {
+                let intensity = read_value(
+                    &mut map,
+                    "intensity",
+                    Value::Spectrum(Spectrum::from_f32(1.0)),
+                )
+                .as_spectrum();
+                let cutoff_angle =
+                    read_value(&mut map, "cutoffAngle", Value::Float(20.0)).as_float();
+                let beam_width = read_value(
+                    &mut map,
+                    "beamWidth",
+                    Value::Float(cutoff_angle * 3.0 / 4.0),
+                )
+                .as_float();
+                let texture = None;
+                Emitter::Spot {
+                    to_world,
+                    intensity,
+                    cutoff_angle,
+                    beam_width,
+                    texture,
+                    sampling_weight,
+                }
+            }
+            "directional" => {
+                let direction = map.remove("direction").unwrap().as_vec();
+                let irradiance = read_value(
+                    &mut map,
+                    "irradiance",
+                    Value::Spectrum(Spectrum::from_f32(1.0)),
+                )
+                .as_spectrum();
+                Emitter::Directional {
+                    to_world,
+                    direction,
+                    irradiance,
+                    sampling_weight,
+                }
+            }
+            "collimated" => {
+                let power = map.remove("power").unwrap().as_spectrum();
+                Emitter::Collimated {
+                    to_world,
+                    power,
+                    sampling_weight,
+                }
+            }
+            "constant" => {
+                let radiance = map.remove("radiance").unwrap().as_spectrum();
+                Emitter::Constant {
+                    radiance,
+                    sampling_weight,
+                }
+            }
+            "envmap" => {
+                let filename = map.remove("filename").unwrap().as_string();
+                let scale = read_value(&mut map, "scale", Value::Float(1.0)).as_float();
+                let gamma = match map.remove("gamma") {
+                    None => None,
+                    Some(v) => Some(v.as_float()),
+                };
+                let cache = match map.remove("cache") {
+                    None => None,
+                    Some(v) => Some(v.as_bool()),
+                };
+                Emitter::EnvMap {
+                    to_world,
+                    filename,
+                    scale,
+                    gamma,
+                    cache,
+                    sampling_weight,
+                }
             }
             _ => {
-                println!("[WARN] Ignoring {} emitter type", emitter_type);
-                skipping_entry(events);
-                None
+                panic!("[ERROR] Uncovered {} emitter type", emitter_type);
+                // skipping_entry(events);
             }
+        }
+    }
+
+    pub fn as_area(self) -> AreaEmitter {
+        match self {
+            Emitter::Area(v) => v,
+            _ => panic!("Wrong emitter type {:?} (as_area)", self),
         }
     }
 }
@@ -624,7 +833,7 @@ impl Emitter {
 pub struct ShapeOption {
     bsdf: Option<BSDF>,
     to_world: Option<Transform>,
-    emitter: Option<Emitter>,
+    emitter: Option<AreaEmitter>,
 }
 
 #[derive(Debug)]
@@ -640,7 +849,7 @@ pub enum Shape {
     },
 }
 impl Shape {
-    pub fn parse<R: Read>(events: &mut Events<R>, shape_type: &str, scene: &Scene) -> Option<Self> {
+    pub fn parse<R: Read>(events: &mut Events<R>, shape_type: &str, scene: &Scene) -> Self {
         // FIXME: Can be object or references
         //  if there are references, we need to handle them
         //  differentely.
@@ -657,7 +866,7 @@ impl Shape {
                 "transform" => to_world = Some(Transform::parse(events)),
                 "emitter" => {
                     let emitter_type = attrs.get("type").unwrap();
-                    emitter = Emitter::parse(events, emitter_type);
+                    emitter = Some(Emitter::parse(events, emitter_type).as_area());
                 }
                 _ => panic!("Unexpected token!"),
             }
@@ -696,20 +905,19 @@ impl Shape {
             "serialized" => {
                 let filename = map.remove("filename").unwrap().as_string();
                 let shape_index = map.remove("shapeIndex").unwrap().as_int() as u32;
-                Some(Shape::Serialized {
+                Shape::Serialized {
                     filename,
                     shape_index,
                     option,
-                })
+                }
             }
             "obj" => {
                 let filename = map.remove("filename").unwrap().as_string();
-                Some(Shape::Obj { filename, option })
+                Shape::Obj { filename, option }
             }
             _ => {
-                println!("[WARN] Ignoring {} shape type", shape_type);
-                skipping_entry(events);
-                None
+                panic!("[ERROR] Uncover {} shape type", shape_type);
+                // skipping_entry(events);
             }
         }
     }
@@ -989,9 +1197,7 @@ pub fn mitsuba_print(file: &str) -> Scene {
                 "emitter" => {
                     let emitter_type = found_attrib(&attributes, "type").unwrap();
                     let emitter = Emitter::parse(&mut iter, &emitter_type);
-                    if let Some(e) = emitter {
-                        scene.emitters.push(e);
-                    }
+                    scene.emitters.push(emitter);
                 }
                 "default" => {
                     println!("[WARN] default are ignored");
@@ -1009,14 +1215,12 @@ pub fn mitsuba_print(file: &str) -> Scene {
                     let shape_type = found_attrib(&attributes, "type").unwrap();
                     let shape_id = found_attrib(&attributes, "id");
                     let shape = Shape::parse(&mut iter, &shape_type, &scene);
-                    if let Some(s) = shape {
-                        match shape_id {
-                            Some(v) => {
-                                scene.shapes_id.insert(v, s);
-                            }
-                            None => {
-                                scene.shapes_unamed.push(s);
-                            }
+                    match shape_id {
+                        Some(v) => {
+                            scene.shapes_id.insert(v, shape);
+                        }
+                        None => {
+                            scene.shapes_unamed.push(shape);
                         }
                     }
                 }
@@ -1072,6 +1276,18 @@ mod tests {
     #[test]
     fn aquarium() {
         let s = "./data/aquarium.xml";
+        print_scene(crate::mitsuba_print(s));
+    }
+
+    #[test]
+    fn chess() {
+        let s = "./data/chess.xml";
+        print_scene(crate::mitsuba_print(s));
+    }
+
+    #[test]
+    fn house() {
+        let s = "./data/house.xml";
         print_scene(crate::mitsuba_print(s));
     }
 
