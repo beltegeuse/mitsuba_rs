@@ -1296,4 +1296,10 @@ mod tests {
         let s = "./data/bsdf.xml";
         print_scene(crate::mitsuba_print(s));
     }
+
+    #[test]
+    fn cbox() {
+        let s = "./data/cbox.xml";
+        print_scene(crate::mitsuba_print(s));
+    }
 }
