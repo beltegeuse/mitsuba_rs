@@ -40,6 +40,12 @@ lazy_static! {
     };
 }
 
+pub struct RGB {
+    pub r: f32,
+    pub g: f32,
+    pub b: f32,
+}
+
 #[derive(Debug, Clone)]
 pub struct Spectrum {
     pub value: String,
@@ -55,10 +61,31 @@ impl Spectrum {
         Self { value: s }
     }
 
-    // Implement material parsing
-    // fn from_material(n: &str) -> (Self, Self) {
-    //     todo!()
-    // }
+    pub fn as_rgb(self) -> RGB {
+        // Mitsuba allow to give RGB values that can be true spectrum
+        // where values are defined for wavelenght.
+        // We do not support yet transformation between these spectrum
+        // and RGB values
+        if let Some(_) = self.value.find(":") {
+            panic!(
+                "True spectrum values are not supported yet! {:?}",
+                self.value
+            );
+        }
+
+        let values = self
+            .value
+            .split(",")
+            .into_iter()
+            .map(|v| v.trim().parse::<f32>().unwrap())
+            .collect::<Vec<_>>();
+
+        match values[..] {
+            [r, g, b] => RGB { r, g, b },
+            [v] => RGB { r: v, g: v, b: v },
+            _ => panic!("Impossible to convert to RGB {:?}", values),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -66,8 +93,8 @@ pub enum BSDFColor<T> {
     Texture(Texture),
     Constant(T),
 }
-type BSDFColorSpectrum = BSDFColor<Spectrum>;
-type BSDFColorFloat = BSDFColor<f32>;
+pub type BSDFColorSpectrum = BSDFColor<Spectrum>;
+pub type BSDFColorFloat = BSDFColor<f32>;
 
 #[derive(Debug)]
 pub enum Value {
@@ -137,6 +164,8 @@ impl Value {
         match self {
             Value::Spectrum(v) => BSDFColorSpectrum::Constant(v),
             Value::Ref(v) => {
+                dbg!(&v);
+                dbg!(&scene.textures);
                 let tex = scene.textures.get(&v).unwrap();
                 BSDFColorSpectrum::Texture(tex.clone())
             }
@@ -492,14 +521,21 @@ impl BSDF {
             reflectance: BSDFColorSpectrum::Constant(Spectrum::from_f32(0.8)),
         }
     }
-    pub fn parse<R: Read>(event: &mut Events<R>, bsdf_type: &str, scene: &Scene) -> Self {
+    pub fn parse<R: Read>(event: &mut Events<R>, bsdf_type: &str, scene: &mut Scene) -> Self {
         // Helpers for catch textures
         let mut textures = HashMap::new();
         let f_texture = |events: &mut Events<R>, t: &str, attrs: HashMap<String, String>| -> bool {
             match t {
                 "texture" => {
                     let texture_name = attrs.get("name").unwrap();
-                    textures.insert(texture_name.clone(), Texture::parse(events));
+                    let texture_id = attrs.get("id");
+                    let texture = Texture::parse(events);
+                    textures.insert(texture_name.clone(), texture.clone());
+                    if let Some(id) = texture_id {
+                        // If there is an id, we need to include it
+                        // to the map for futher uses
+                        scene.textures.insert(id.to_string(), texture);
+                    }
                 }
                 _ => panic!("Twosided encounter unexpected token {:?}", t),
             }
@@ -621,9 +657,9 @@ impl BSDF {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Texture {
-    filename: String,
-    filter_type: String,
-    gamma: f32,
+    pub filename: String,
+    pub filter_type: String,
+    pub gamma: f32,
 }
 impl Texture {
     pub fn parse<R: Read>(events: &mut Events<R>) -> Self {
@@ -831,9 +867,10 @@ impl Emitter {
 
 #[derive(Debug)]
 pub struct ShapeOption {
-    bsdf: Option<BSDF>,
-    to_world: Option<Transform>,
-    emitter: Option<AreaEmitter>,
+    pub flip_normal: bool, // false
+    pub bsdf: Option<BSDF>,
+    pub to_world: Option<Transform>,
+    pub emitter: Option<AreaEmitter>,
 }
 
 #[derive(Debug)]
@@ -841,15 +878,57 @@ pub enum Shape {
     Serialized {
         filename: String,
         shape_index: u32,
+        face_normal: bool,             // false
+        max_smooth_angle: Option<f32>, // optional
         option: ShapeOption,
     },
     Obj {
         filename: String,
+        face_normal: bool,             // false
+        max_smooth_angle: Option<f32>, // optional
+        flip_tex_coords: bool,         // true
+        collapse: bool,                // false
         option: ShapeOption,
+    },
+    Ply {
+        filename: String,
+        face_normal: bool,             // false
+        max_smooth_angle: Option<f32>, // optional
+        srgb: bool,                    // true
+        option: ShapeOption,
+    },
+    Cube {
+        option: ShapeOption,
+    },
+    Sphere {
+        center: Point3<f32>, // (0,0,0)
+        radius: f32,         // 1
+        option: ShapeOption,
+    },
+    Cylinder {
+        p0: Point3<f32>, // (0,0,0)
+        p1: Point3<f32>, // (0,0,1)
+        radius: f32,     // 1
+        option: ShapeOption,
+    },
+    Rectangle {
+        option: ShapeOption,
+    },
+    Disk {
+        option: ShapeOption,
+    },
+    // TODO: Do shape group can have bsdf, to_world... associated?
+    ShapeGroup {
+        shapes: Vec<Shape>,
+    },
+    // Depending if we have reference or the group
+    Instance {
+        shape: Option<Box<Shape>>,
+        ref_shape: Option<String>,
     },
 }
 impl Shape {
-    pub fn parse<R: Read>(events: &mut Events<R>, shape_type: &str, scene: &Scene) -> Self {
+    pub fn parse<R: Read>(events: &mut Events<R>, shape_type: &str, scene: &mut Scene) -> Self {
         // FIXME: Can be object or references
         //  if there are references, we need to handle them
         //  differentely.
@@ -875,6 +954,7 @@ impl Shape {
 
         let (mut map, refs) = values_fn(events, true, f);
         for r in refs {
+            // Only BSDF are supported for refs without type
             if let Some(v) = scene.bsdfs.get(&r) {
                 bsdf = Some(v.clone());
                 continue;
@@ -894,11 +974,21 @@ impl Shape {
             assert!(map.remove("emitter").is_none());
         }
 
-        // Create shape option
+        let flip_normal = read_value(&mut map, "flipNormal", Value::Boolean(false)).as_bool();
+
+        // Create shape option (shared across all shapes)
         let option = ShapeOption {
+            flip_normal,
             bsdf,
             to_world,
             emitter,
+        };
+
+        // Read some values in advance to reduce the redundancy
+        let face_normal = read_value(&mut map, "faceNormal", Value::Boolean(false)).as_bool();
+        let max_smooth_angle = match map.remove("maxSmoothAngle") {
+            None => None,
+            Some(v) => Some(v.as_float()),
         };
 
         match shape_type {
@@ -908,14 +998,65 @@ impl Shape {
                 Shape::Serialized {
                     filename,
                     shape_index,
+                    face_normal,
+                    max_smooth_angle,
                     option,
                 }
             }
             "obj" => {
                 let filename = map.remove("filename").unwrap().as_string();
-                Shape::Obj { filename, option }
+                let flip_tex_coords =
+                    read_value(&mut map, "flipTexCoords", Value::Boolean(true)).as_bool();
+                let collapse = read_value(&mut map, "collapse", Value::Boolean(false)).as_bool();
+                Shape::Obj {
+                    filename,
+                    face_normal,
+                    max_smooth_angle,
+                    flip_tex_coords,
+                    collapse,
+                    option,
+                }
             }
+            "ply" => {
+                let filename = map.remove("filename").unwrap().as_string();
+                let srgb = read_value(&mut map, "srgb", Value::Boolean(true)).as_bool();
+                Shape::Ply {
+                    filename,
+                    face_normal,
+                    max_smooth_angle,
+                    srgb,
+                    option,
+                }
+            }
+            "cube" => Shape::Cube { option },
+            "sphere" => {
+                let center =
+                    read_value(&mut map, "center", Value::Point(Point3::new(0.0, 0.0, 0.0)))
+                        .as_point();
+                let radius = read_value(&mut map, "radius", Value::Float(1.0)).as_float();
+                Shape::Sphere {
+                    center,
+                    radius,
+                    option,
+                }
+            }
+            "cylinder" => {
+                let p0 =
+                    read_value(&mut map, "p0", Value::Point(Point3::new(0.0, 0.0, 0.0))).as_point();
+                let p1 =
+                    read_value(&mut map, "p1", Value::Point(Point3::new(0.0, 0.0, 1.0))).as_point();
+                let radius = read_value(&mut map, "radius", Value::Float(1.0)).as_float();
+                Shape::Cylinder {
+                    p0,
+                    p1,
+                    radius,
+                    option,
+                }
+            }
+            "rectangle" => Shape::Rectangle { option },
+            "disk" => Shape::Disk { option },
             _ => {
+                // TODO: Need to implement shapegroup and instance
                 panic!("[ERROR] Uncover {} shape type", shape_type);
                 // skipping_entry(events);
             }
@@ -925,8 +1066,8 @@ impl Shape {
 
 #[derive(Debug)]
 pub struct Film {
-    height: u32,
-    width: u32,
+    pub height: u32,
+    pub width: u32,
 }
 impl Film {
     pub fn parse<R: Read>(events: &mut Events<R>) -> Self {
@@ -1075,6 +1216,10 @@ impl Transform {
 
         Transform(trans)
     }
+
+    pub fn as_matrix(self) -> Matrix4<f32> {
+        self.0
+    }
 }
 
 // Only support perspective sensor
@@ -1090,8 +1235,8 @@ pub struct Sensor {
     pub near_clip: f32,     // 0.01
     pub far_clip: f32,      // 1000
     // More complex structures
-    pub film: Option<Film>,
-    pub to_world: Option<Transform>,
+    pub film: Film,
+    pub to_world: Transform,
 }
 impl Sensor {
     pub fn parse<R: Read>(events: &mut Events<R>, sensor_type: &str) -> Self {
@@ -1099,11 +1244,11 @@ impl Sensor {
 
         // Use closure to initialize these extra stuffs
         let mut film = None;
-        let mut to_world = None;
+        let mut to_world = Transform(Matrix4::one());
         let f = |events: &mut Events<R>, t: &str, _: HashMap<String, String>| -> bool {
             match t {
                 "film" => film = Some(Film::parse(events)),
-                "transform" => to_world = Some(Transform::parse(events)),
+                "transform" => to_world = Transform::parse(events),
                 "sampler" => {
                     println!("Skipping sampler information");
                     skipping_entry(events);
@@ -1130,7 +1275,7 @@ impl Sensor {
             shutter_close,
             near_clip,
             far_clip,
-            film,
+            film: film.unwrap(),
             to_world,
         }
     }
@@ -1138,12 +1283,12 @@ impl Sensor {
 
 #[derive(Debug)]
 pub struct Scene {
-    bsdfs: HashMap<String, BSDF>,
-    textures: HashMap<String, Texture>,
-    shapes_id: HashMap<String, Shape>,
-    shapes_unamed: Vec<Shape>,
-    sensors: Vec<Sensor>,
-    emitters: Vec<Emitter>,
+    pub bsdfs: HashMap<String, BSDF>,
+    pub textures: HashMap<String, Texture>,
+    pub shapes_id: HashMap<String, Shape>,
+    pub shapes_unamed: Vec<Shape>,
+    pub sensors: Vec<Sensor>,
+    pub emitters: Vec<Emitter>,
 }
 impl Scene {
     // TODO:
@@ -1152,7 +1297,7 @@ impl Scene {
     // }
 }
 
-pub fn mitsuba_print(file: &str) -> Scene {
+pub fn parse(file: &str) -> Scene {
     let file = File::open(file).unwrap();
     let file = BufReader::new(file);
 
@@ -1181,7 +1326,7 @@ pub fn mitsuba_print(file: &str) -> Scene {
                 "bsdf" => {
                     let bsdf_type = found_attrib(&attributes, "type").unwrap();
                     let bsdf_id = found_attrib(&attributes, "id").unwrap();
-                    let bsdf = BSDF::parse(&mut iter, &bsdf_type, &scene);
+                    let bsdf = BSDF::parse(&mut iter, &bsdf_type, &mut scene);
                     scene.bsdfs.insert(bsdf_id, bsdf);
                 }
                 "texture" => {
@@ -1214,7 +1359,7 @@ pub fn mitsuba_print(file: &str) -> Scene {
                 "shape" => {
                     let shape_type = found_attrib(&attributes, "type").unwrap();
                     let shape_id = found_attrib(&attributes, "id");
-                    let shape = Shape::parse(&mut iter, &shape_type, &scene);
+                    let shape = Shape::parse(&mut iter, &shape_type, &mut scene);
                     match shape_id {
                         Some(v) => {
                             scene.shapes_id.insert(v, shape);
@@ -1270,36 +1415,42 @@ mod tests {
     #[test]
     fn bookshelf() {
         let s = "./data/bookshelf.xml";
-        print_scene(crate::mitsuba_print(s));
+        print_scene(crate::parse(s));
     }
 
     #[test]
     fn aquarium() {
         let s = "./data/aquarium.xml";
-        print_scene(crate::mitsuba_print(s));
+        print_scene(crate::parse(s));
     }
 
     #[test]
     fn chess() {
         let s = "./data/chess.xml";
-        print_scene(crate::mitsuba_print(s));
+        print_scene(crate::parse(s));
     }
 
     #[test]
     fn house() {
         let s = "./data/house.xml";
-        print_scene(crate::mitsuba_print(s));
+        print_scene(crate::parse(s));
     }
 
     #[test]
     fn bsdf() {
         let s = "./data/bsdf.xml";
-        print_scene(crate::mitsuba_print(s));
+        print_scene(crate::parse(s));
     }
 
     #[test]
     fn cbox() {
         let s = "./data/cbox.xml";
-        print_scene(crate::mitsuba_print(s));
+        print_scene(crate::parse(s));
+    }
+
+    #[test]
+    fn kitchen() {
+        let s = "./data/kitchen.xml";
+        print_scene(crate::parse(s));
     }
 }
