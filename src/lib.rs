@@ -53,6 +53,29 @@ pub struct RGB {
     pub b: f32,
 }
 
+fn hex_to_int(c: char) -> i8 {
+    let c = c.to_ascii_uppercase();
+    match c {
+        '0' => 0,
+        '1' => 1,
+        '2' => 2,
+        '3' => 3,
+        '4' => 4,
+        '5' => 5,
+        '6' => 6,
+        '7' => 7,
+        '8' => 8,
+        '9' => 9,
+        'A' => 10,
+        'B' => 11,
+        'C' => 12,
+        'D' => 13,
+        'E' => 14,
+        'F' => 15,
+        _ => panic!("{} have no hex representation", c),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Spectrum {
     pub value: String,
@@ -89,10 +112,25 @@ impl Spectrum {
                 .into_iter()
                 .map(|v| v.trim().parse::<f32>().unwrap())
                 .collect::<Vec<_>>()
-        } else if let Some(p) = self.value.trim().find('#') {
-            assert!(p == 0);
-            // TODO: Do HEX conversion
-            vec![0.0] // Black value
+        } else if let Some(_p) = self.value.trim().find('#') {
+            // Conversion "#rrggbb" into rgb
+            let values = self.value.trim().chars().skip(1);
+            let values = values.collect::<Vec<_>>();
+            assert_eq!(values.len(), 6);
+            // Process by pairs
+            values
+                .chunks_exact(2)
+                .map(|v| {
+                    let (v1, v2) = match v[..] {
+                        [v1, v2] => (v1, v2),
+                        _ => panic!("chunks_exact failed?"),
+                    };
+                    let v1 = hex_to_int(v1);
+                    let v2 = hex_to_int(v2);
+                    let v = v2 as i32 * 10 + v1 as i32;
+                    v as f32 / 255.0
+                })
+                .collect()
         } else {
             self.value
                 .split_whitespace()
@@ -759,7 +797,7 @@ impl BSDF {
                     true
                 };
                 let (mut map, refs) = values_fn(event, true, f);
-                assert!(refs.is_empty()); // FIXME: This is a strong assumption for this type of material...
+                assert!(refs.is_empty());
 
                 // Parse the weights
                 let weights = map.remove("weights").unwrap().as_string();
@@ -770,8 +808,19 @@ impl BSDF {
                     } else {
                         trimed.split(" ")
                     };
-                    splitted.map(|v| v.trim().parse::<f32>().unwrap()).collect()
+                    splitted
+                        .map(|v| v.trim().parse::<f32>().unwrap())
+                        .collect::<Vec<_>>()
                 };
+
+                if bsdfs.is_empty() {
+                    // Certainly the different BSDF are with references
+                    // Do the iterations based on names
+                    for i in 0..weights.len() {
+                        let ref_name = map.remove(&format!("mat{}", i + 1)).unwrap().as_string();
+                        bsdfs.push(scene.bsdfs.get(&ref_name).unwrap().clone());
+                    }
+                }
 
                 BSDF::MixtureBSDF { weights, bsdfs }
             }
