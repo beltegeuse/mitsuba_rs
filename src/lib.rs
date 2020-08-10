@@ -529,6 +529,14 @@ pub enum BSDF {
         specular_transmittance: BSDFColorSpectrum, // s(1.0)
         thin: bool,                                // to handle both objects
     },
+    Plastic {
+        distribution: Option<Distribution>,
+        int_ior: f32,                            // intIOR "polypropylene"
+        ext_ior: f32,                            // extIOR "air"
+        specular_reflectance: BSDFColorSpectrum, // s(1.0)
+        diffuse_reflectance: BSDFColorSpectrum,  // s(0.5)
+        nonlinear: bool,                         // false
+    },
     TwoSided {
         bsdf: Box<BSDF>,
     },
@@ -665,7 +673,50 @@ impl BSDF {
                     bsdf: Box::new(bsdfs[0].clone()),
                 }
             }
-            "conductor" | "roughconductor" | "roughplastic" | "plastic" => {
+            "roughplastic" | "plastic" => {
+                let (mut map, refs) = values_fn(event, true, f_texture);
+                assert!(refs.is_empty());
+                let distribution = if bsdf_type == "roughplastic" {
+                    Some(Distribution::parse(&mut map, scene))
+                } else {
+                    None
+                };
+
+                let int_ior = read_value(
+                    &mut map,
+                    "intIOR",
+                    Value::String("polypropylene".to_string()),
+                )
+                .as_ior();
+                let ext_ior =
+                    read_value(&mut map, "extIOR", Value::String("air".to_string())).as_ior();
+                let specular_reflectance = read_value_or_texture_spectrum(
+                    &mut map,
+                    "specularReflectance",
+                    Value::Spectrum(Spectrum::from_f32(1.0)),
+                    &textures,
+                    scene,
+                );
+                let diffuse_reflectance = read_value_or_texture_spectrum(
+                    &mut map,
+                    "diffuseReflectance",
+                    Value::Spectrum(Spectrum::from_f32(0.5)),
+                    &textures,
+                    scene,
+                );
+
+                let nonlinear = read_value(&mut map, "nonlinear", Value::Boolean(false)).as_bool();
+
+                BSDF::Plastic {
+                    distribution,
+                    int_ior,
+                    ext_ior,
+                    specular_reflectance,
+                    diffuse_reflectance,
+                    nonlinear,
+                }
+            }
+            "conductor" | "roughconductor" => {
                 skipping_entry(event);
                 BSDF::default()
             }
