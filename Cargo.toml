@@ -4,7 +4,14 @@ version = "0.1.0"
 authors = ["beltegeuse <adrien.gruson@gmail.com>"]
 edition = "2018"
 
+[features]
+default = ["serialized"]
+serialized = ["miniz_oxide", "byteorder", "bitflags"]
+
 [dependencies]
 xml-rs = "0.8"
 cgmath = "0.17" # TODO: Think to remove this dependencies
 lazy_static = "1.4"
+miniz_oxide = { version = "0.4", optional = true }
+byteorder = {  version = "1.3", optional = true }
+bitflags = {  version = "1.2", optional = true }

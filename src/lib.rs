@@ -2,11 +2,18 @@ extern crate cgmath;
 extern crate xml;
 #[macro_use]
 extern crate lazy_static;
-use std::fs::File;
-use std::io::BufReader;
+#[cfg(feature = "serialized")]
+extern crate byteorder;
+#[cfg(feature = "serialized")]
+extern crate miniz_oxide;
+#[cfg(feature = "serialized")]
+#[macro_use]
+extern crate bitflags;
 
 use cgmath::*;
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::BufReader;
 use std::io::Read;
 use xml::reader::{EventReader, Events, XmlEvent};
 
@@ -874,14 +881,17 @@ pub struct ShapeOption {
 }
 
 #[derive(Debug)]
+pub struct SerializedShape {
+    pub filename: String,
+    pub shape_index: u32,
+    pub face_normal: bool,             // false
+    pub max_smooth_angle: Option<f32>, // optional
+    pub option: ShapeOption,
+}
+
+#[derive(Debug)]
 pub enum Shape {
-    Serialized {
-        filename: String,
-        shape_index: u32,
-        face_normal: bool,             // false
-        max_smooth_angle: Option<f32>, // optional
-        option: ShapeOption,
-    },
+    Serialized(SerializedShape),
     Obj {
         filename: String,
         face_normal: bool,             // false
@@ -995,13 +1005,13 @@ impl Shape {
             "serialized" => {
                 let filename = map.remove("filename").unwrap().as_string();
                 let shape_index = map.remove("shapeIndex").unwrap().as_int() as u32;
-                Shape::Serialized {
+                Shape::Serialized(SerializedShape {
                     filename,
                     shape_index,
                     face_normal,
                     max_smooth_angle,
                     option,
-                }
+                })
             }
             "obj" => {
                 let filename = map.remove("filename").unwrap().as_string();
@@ -1296,6 +1306,9 @@ impl Scene {
     //     self.shapes_id.iter().map(|(k,v)| v).chain(self.shapes_unamed.iter())
     // }
 }
+
+#[cfg(feature = "serialized")]
+pub mod serialized;
 
 pub fn parse(file: &str) -> Scene {
     let file = File::open(file).unwrap();
