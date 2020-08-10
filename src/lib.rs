@@ -80,12 +80,26 @@ impl Spectrum {
             );
         }
 
-        let values = self
-            .value
-            .split(",")
-            .into_iter()
-            .map(|v| v.trim().parse::<f32>().unwrap())
-            .collect::<Vec<_>>();
+        // Kinda anoying but Mitsuba allow multiple way to specify the
+        // format of spectrum (single value, "r, g, b", "r g b" or "#color")
+        // This is why this part of the code is a bit complicated
+        let values = self.value.split(",");
+        let values = if values.clone().count() > 1 {
+            values
+                .into_iter()
+                .map(|v| v.trim().parse::<f32>().unwrap())
+                .collect::<Vec<_>>()
+        } else if let Some(p) = self.value.trim().find('#') {
+            assert!(p == 0);
+            // TODO: Do HEX conversion
+            vec![0.0] // Black value
+        } else {
+            self.value
+                .split_whitespace()
+                .into_iter()
+                .map(|v| v.parse::<f32>().unwrap())
+                .collect::<Vec<_>>()
+        };
 
         match values[..] {
             [r, g, b] => RGB { r, g, b },
@@ -171,8 +185,6 @@ impl Value {
         match self {
             Value::Spectrum(v) => BSDFColorSpectrum::Constant(v),
             Value::Ref(v) => {
-                dbg!(&v);
-                dbg!(&scene.textures);
                 let tex = scene.textures.get(&v).unwrap();
                 BSDFColorSpectrum::Texture(tex.clone())
             }
@@ -1089,7 +1101,7 @@ impl Film {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Transform(Matrix4<f32>);
 impl Transform {
     pub fn parse<R: Read>(events: &mut Events<R>) -> Self {
@@ -1310,20 +1322,11 @@ impl Scene {
 #[cfg(feature = "serialized")]
 pub mod serialized;
 
-pub fn parse(file: &str) -> Scene {
-    let file = File::open(file).unwrap();
+fn parse_scene(filename: &str, mut scene: &mut Scene) {
+    let file = File::open(filename).unwrap();
     let file = BufReader::new(file);
 
     let parser = EventReader::new(file);
-
-    let mut scene = Scene {
-        bsdfs: HashMap::new(),
-        textures: HashMap::new(),
-        shapes_id: HashMap::new(),
-        shapes_unamed: Vec::new(),
-        sensors: Vec::new(),
-        emitters: Vec::new(),
-    };
 
     let mut iter = parser.into_iter();
     loop {
@@ -1369,6 +1372,19 @@ pub fn parse(file: &str) -> Scene {
                     // as for scene parsing, it gives us no information
                     skipping_entry(&mut iter);
                 }
+                "include" => {
+                    // Read a new file
+                    let other_filename = found_attrib(&attributes, "filename").unwrap();
+                    let filename = std::path::Path::new(filename)
+                        .parent()
+                        .unwrap()
+                        .join(std::path::Path::new(&other_filename));
+                    parse_scene(
+                        &filename.into_os_string().into_string().unwrap(),
+                        &mut scene,
+                    );
+                    skipping_entry(&mut iter);
+                }
                 "shape" => {
                     let shape_type = found_attrib(&attributes, "type").unwrap();
                     let shape_id = found_attrib(&attributes, "id");
@@ -1394,7 +1410,19 @@ pub fn parse(file: &str) -> Scene {
             _ => {}
         }
     }
-    return scene;
+}
+
+pub fn parse(file: &str) -> Scene {
+    let mut scene = Scene {
+        bsdfs: HashMap::new(),
+        textures: HashMap::new(),
+        shapes_id: HashMap::new(),
+        shapes_unamed: Vec::new(),
+        sensors: Vec::new(),
+        emitters: Vec::new(),
+    };
+    parse_scene(file, &mut scene);
+    scene
 }
 
 #[cfg(test)]

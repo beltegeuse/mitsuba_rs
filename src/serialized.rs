@@ -20,6 +20,7 @@ bitflags! {
 }
 
 pub struct Serialized {
+    pub name: String,
     pub vertices: Vec<Vector3<f32>>,
     pub normals: Option<Vec<Vector3<f32>>>,
     pub texcoords: Option<Vec<Vector2<f32>>>,
@@ -60,10 +61,10 @@ pub fn read_serialized(s: &SerializedShape, wk: &std::path::Path) -> Serialized 
             offsets[s.shape_index as usize] as u64,
         ))
         .unwrap();
-    let id_format = f.read_u16::<LittleEndian>().unwrap();
+    let _id_format = f.read_u16::<LittleEndian>().unwrap();
     let id_file = f.read_u16::<LittleEndian>().unwrap();
     assert_eq!(id_file, 4);
-    println!("id_format: {:#x} | id_file: {:#x}", id_format, id_file);
+    //println!("id_format: {:#x} | id_file: {:#x}", id_format, id_file);
 
     // Read the whole mesh (need to decompress after that)
     let buffer = {
@@ -71,8 +72,8 @@ pub fn read_serialized(s: &SerializedShape, wk: &std::path::Path) -> Serialized 
         f.read_exact(buffer.as_mut()).unwrap();
         miniz_oxide::inflate::decompress_to_vec_zlib(&mut buffer).unwrap()
     };
-    println!("Compressed: {}", mesh_size);
-    println!("Uncompressed: {}", buffer.len());
+    // println!("Compressed: {}", mesh_size);
+    // println!("Uncompressed: {}", buffer.len());
 
     let mut f = Cursor::new(buffer);
     let flag = f.read_u32::<LittleEndian>().unwrap();
@@ -86,11 +87,11 @@ pub fn read_serialized(s: &SerializedShape, wk: &std::path::Path) -> Serialized 
         }
         std::string::String::from_utf8_lossy(&buf_name).into_owned()
     };
-    println!("name: '{}'", name);
+    // println!("name: '{}'", name);
 
     let nb_vertices = f.read_u64::<LittleEndian>().unwrap();
     let nb_tri = f.read_u64::<LittleEndian>().unwrap();
-    println!("vertices: {} | nb_tri {}", nb_vertices, nb_tri);
+    // println!("vertices: {} | nb_tri {}", nb_vertices, nb_tri);
 
     // Information about the shape
     let single_precision = if flag.intersects(Flags::SINGLE_PRECISION) {
@@ -99,14 +100,24 @@ pub fn read_serialized(s: &SerializedShape, wk: &std::path::Path) -> Serialized 
         assert!(flag.intersects(Flags::DOUBLE_PRECISION));
         false
     };
-    assert!(single_precision);
-    println!("{:?}", flag);
+    // println!("{:?}", flag);
+
+    // Downscale the precision for the moment
+    // TODO: Do templated version to not bound the precision
+    //  from Vec precision
+    let read_float = |f: &mut Cursor<Vec<u8>>| -> f32 {
+        if single_precision {
+            f.read_f32::<LittleEndian>().unwrap()
+        } else {
+            f.read_f64::<LittleEndian>().unwrap() as f32
+        }
+    };
 
     let vertices = (0..nb_vertices)
         .map(|_| {
-            let x = f.read_f32::<LittleEndian>().unwrap();
-            let y = f.read_f32::<LittleEndian>().unwrap();
-            let z = f.read_f32::<LittleEndian>().unwrap();
+            let x = read_float(&mut f);
+            let y = read_float(&mut f);
+            let z = read_float(&mut f);
             Vector3::new(x, y, z)
         })
         .collect();
@@ -115,9 +126,9 @@ pub fn read_serialized(s: &SerializedShape, wk: &std::path::Path) -> Serialized 
         Some(
             (0..nb_vertices)
                 .map(|_| {
-                    let x = f.read_f32::<LittleEndian>().unwrap();
-                    let y = f.read_f32::<LittleEndian>().unwrap();
-                    let z = f.read_f32::<LittleEndian>().unwrap();
+                    let x = read_float(&mut f);
+                    let y = read_float(&mut f);
+                    let z = read_float(&mut f);
                     Vector3::new(x, y, z)
                 })
                 .collect(),
@@ -130,8 +141,8 @@ pub fn read_serialized(s: &SerializedShape, wk: &std::path::Path) -> Serialized 
         Some(
             (0..nb_vertices)
                 .map(|_| {
-                    let u = f.read_f32::<LittleEndian>().unwrap();
-                    let v = f.read_f32::<LittleEndian>().unwrap();
+                    let u = read_float(&mut f);
+                    let v = read_float(&mut f);
                     Vector2::new(u, v)
                 })
                 .collect(),
@@ -144,9 +155,9 @@ pub fn read_serialized(s: &SerializedShape, wk: &std::path::Path) -> Serialized 
         Some(
             (0..nb_vertices)
                 .map(|_| {
-                    let x = f.read_f32::<LittleEndian>().unwrap();
-                    let y = f.read_f32::<LittleEndian>().unwrap();
-                    let z = f.read_f32::<LittleEndian>().unwrap();
+                    let x = read_float(&mut f);
+                    let y = read_float(&mut f);
+                    let z = read_float(&mut f);
                     Vector3::new(x, y, z)
                 })
                 .collect(),
@@ -178,6 +189,7 @@ pub fn read_serialized(s: &SerializedShape, wk: &std::path::Path) -> Serialized 
     };
 
     Serialized {
+        name,
         vertices,
         normals,
         texcoords,
