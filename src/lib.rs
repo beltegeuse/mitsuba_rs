@@ -508,9 +508,9 @@ pub enum BSDF {
         reflectance: BSDFColorSpectrum,
     },
     Roughtdiffuse {
-        relectance: BSDFColorSpectrum, // s(0.5)
-        alpha: BSDFColorSpectrum,      // s(0.2)
-        use_fast_approx: bool,         // false
+        reflectance: BSDFColorSpectrum, // s(0.5)
+        alpha: BSDFColorFloat,          // 0.2
+        use_fast_approx: bool,          // false
     },
     Conductor {
         distribution: Option<Distribution>,
@@ -539,6 +539,10 @@ pub enum BSDF {
     },
     TwoSided {
         bsdf: Box<BSDF>,
+    },
+    MixtureBSDF {
+        weights: Vec<f32>,
+        bsdfs: Vec<BSDF>,
     },
 }
 
@@ -613,7 +617,6 @@ impl BSDF {
                 );
                 BSDF::Diffuse { reflectance }
             }
-
             "dielectric" | "roughdielectric" | "thindielectric" => {
                 let (mut map, refs) = values_fn(event, true, f_texture);
                 assert!(refs.is_empty());
@@ -715,6 +718,62 @@ impl BSDF {
                     diffuse_reflectance,
                     nonlinear,
                 }
+            }
+            "roughdiffuse" => {
+                let (mut map, refs) = values_fn(event, true, f_texture);
+                assert!(refs.is_empty());
+                let reflectance = read_value_or_texture_spectrum(
+                    &mut map,
+                    "reflectance",
+                    Value::Spectrum(Spectrum::from_f32(0.5)),
+                    &textures,
+                    scene,
+                );
+                let alpha = read_value_or_texture_f32(
+                    &mut map,
+                    "alpha",
+                    Value::Spectrum(Spectrum::from_f32(0.1)),
+                    &textures,
+                    scene,
+                );
+                let use_fast_approx =
+                    read_value(&mut map, "useFastApprox", Value::Boolean(false)).as_bool();
+
+                BSDF::Roughtdiffuse {
+                    reflectance,
+                    alpha,
+                    use_fast_approx,
+                }
+            }
+            "mixturebsdf" => {
+                // We need to parse the next element, including BSDF
+                let mut bsdfs = vec![];
+                let f = |events: &mut Events<R>, t: &str, attrs: HashMap<String, String>| -> bool {
+                    match t {
+                        "bsdf" => {
+                            let bsdf_type = attrs.get("type").unwrap();
+                            bsdfs.push(BSDF::parse(events, bsdf_type, scene));
+                        }
+                        _ => panic!("Twosided encounter unexpected token {:?}", t),
+                    }
+                    true
+                };
+                let (mut map, refs) = values_fn(event, true, f);
+                assert!(refs.is_empty()); // FIXME: This is a strong assumption for this type of material...
+
+                // Parse the weights
+                let weights = map.remove("weights").unwrap().as_string();
+                let weights = {
+                    let trimed = weights.trim();
+                    let splitted = if trimed.clone().split(",").count() > 1 {
+                        trimed.split(",")
+                    } else {
+                        trimed.split(" ")
+                    };
+                    splitted.map(|v| v.trim().parse::<f32>().unwrap()).collect()
+                };
+
+                BSDF::MixtureBSDF { weights, bsdfs }
             }
             "conductor" | "roughconductor" => {
                 skipping_entry(event);
@@ -996,8 +1055,8 @@ pub enum Shape {
     },
     // Depending if we have reference or the group
     Instance {
-        shape: Option<Box<Shape>>,
-        ref_shape: Option<String>,
+        shape: String,
+        option: ShapeOption,
     },
 }
 impl Shape {
@@ -1008,7 +1067,8 @@ impl Shape {
         let mut bsdf = None;
         let mut to_world = None;
         let mut emitter = None;
-
+        let mut shapes = vec![];
+        let mut shape = None; // Only for instance
         let f = |events: &mut Events<R>, t: &str, attrs: HashMap<String, String>| -> bool {
             match t {
                 "bsdf" => {
@@ -1020,18 +1080,28 @@ impl Shape {
                     let emitter_type = attrs.get("type").unwrap();
                     emitter = Some(Emitter::parse(events, emitter_type).as_area());
                 }
-                _ => panic!("Unexpected token!"),
+                "shape" => {
+                    let shape_type = attrs.get("type").unwrap();
+                    shapes.push(Shape::parse(events, shape_type, scene));
+                }
+                _ => panic!("Unexpected token! {}", t),
             }
             true
         };
 
         let (mut map, refs) = values_fn(events, true, f);
         for r in refs {
-            // Only BSDF are supported for refs without type
+            // BSDF are supported for refs without type
             if let Some(v) = scene.bsdfs.get(&r) {
                 bsdf = Some(v.clone());
                 continue;
             }
+            // For instance, we check if the shape exists
+            if scene.shapes_id.get(&r).is_some() {
+                shape = Some(r);
+                continue;
+            }
+
             todo!();
         }
 
@@ -1067,7 +1137,8 @@ impl Shape {
         match shape_type {
             "serialized" => {
                 let filename = map.remove("filename").unwrap().as_string();
-                let shape_index = map.remove("shapeIndex").unwrap().as_int() as u32;
+                let shape_index =
+                    read_value(&mut map, "shapeIndex", Value::Integer(0)).as_int() as u32;
                 Shape::Serialized(SerializedShape {
                     filename,
                     shape_index,
@@ -1128,6 +1199,16 @@ impl Shape {
             }
             "rectangle" => Shape::Rectangle { option },
             "disk" => Shape::Disk { option },
+            "shapegroup" => {
+                assert!(option.bsdf.is_none());
+                assert!(option.to_world.is_none());
+                assert!(option.emitter.is_none());
+                Shape::ShapeGroup { shapes }
+            }
+            "instance" => {
+                let shape = shape.unwrap();
+                Shape::Instance { shape, option }
+            }
             _ => {
                 // TODO: Need to implement shapegroup and instance
                 panic!("[ERROR] Uncover {} shape type", shape_type);
@@ -1220,6 +1301,7 @@ impl Transform {
                     }
                     "matrix" => {
                         let values = found_attrib(&attributes, "value").unwrap();
+                        let values = values.trim();
                         let values = values
                             .split(" ")
                             .into_iter()
