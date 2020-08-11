@@ -47,6 +47,85 @@ lazy_static! {
     };
 }
 
+lazy_static! {
+    // Precomputed (eta, k) in RGB from Mitsuba
+    static ref MATERIALS: HashMap<String, (String, String)> = {
+        let mut m = HashMap::new();
+        m.insert("a-C".to_string(), ("2.9296, 2.22909, 1.97023".to_string(), "0.892218, 0.791926, 0.815701".to_string()));
+        m.insert("Ag".to_string(), ("0.155518, 0.116786, 0.138372".to_string(), "4.83241, 3.12322, 2.14934".to_string()));
+        m.insert("AlAs_palik".to_string(), ("3.60456, 3.23388, 2.20695".to_string(), "0.000688883, -0.000497156, 0.00753".to_string()));
+        m.insert("AlAs".to_string(), ("3.60456, 3.23388, 2.20695".to_string(), "0.000688883, -0.000497156, 0.00753".to_string()));
+        m.insert("AlSb_palik".to_string(), ("-0.0339369, 4.14454, 4.6468".to_string(), "-0.0330091, 0.10024, 1.29296".to_string()));
+        m.insert("AlSb".to_string(), ("-0.0339369, 4.14454, 4.6468".to_string(), "-0.0330091, 0.10024, 1.29296".to_string()));
+        m.insert("Al".to_string(), ("1.66026, 0.881462, 0.521613".to_string(), "9.22807, 6.27106, 4.84111".to_string()));
+        m.insert("Au".to_string(), ("0.143552, 0.377438, 1.43825".to_string(), "3.98397, 2.38495, 1.60434".to_string()));
+        m.insert("Be_palik".to_string(), ("4.17079, 3.18615, 2.78579".to_string(), "3.84741, 3.00959, 2.86869".to_string()));
+        m.insert("Be".to_string(), ("4.17079, 3.18615, 2.78579".to_string(), "3.84741, 3.00959, 2.86869".to_string()));
+        m.insert("Cr".to_string(), ("4.48822, 2.90684, 1.66261".to_string(), "5.21422, 4.2289, 3.75312".to_string()));
+        m.insert("CsI_palik".to_string(), ("2.14445, 1.70236, 1.66293".to_string(), "0, 0, 0".to_string()));
+        m.insert("CsI".to_string(), ("2.14445, 1.70236, 1.66293".to_string(), "0, 0, 0".to_string()));
+        m.insert("Cu2O_palik".to_string(), ("3.54545, 2.94339, 2.71336".to_string(), "0.120343, 0.205637, 0.637298".to_string()));
+        m.insert("Cu2O".to_string(), ("3.54545, 2.94339, 2.71336".to_string(), "0.120343, 0.205637, 0.637298".to_string()));
+        m.insert("CuO_palik".to_string(), ("3.25286, 2.44938, 2.2043".to_string(), "0.520388, 0.569286, 0.726005".to_string()));
+        m.insert("CuO".to_string(), ("3.25286, 2.44938, 2.2043".to_string(), "0.520388, 0.569286, 0.726005".to_string()));
+        m.insert("Cu_palik".to_string(), ("0.241275, 0.903804, 1.10182".to_string(), "3.95032, 2.46606, 2.1349".to_string()));
+        m.insert("Cu".to_string(), ("0.208084, 0.919438, 1.10263".to_string(), "3.92329, 2.45611, 2.14264".to_string()));
+        m.insert("d-C_palik".to_string(), ("2.71105, 2.31816, 2.23336".to_string(), "0, 0, 0".to_string()));
+        m.insert("d-C".to_string(), ("2.71105, 2.31816, 2.23336".to_string(), "0, 0, 0".to_string()));
+        m.insert("Hg_palik".to_string(), ("2.42652, 1.45642, 0.914459".to_string(), "6.34803, 4.39248, 3.42748".to_string()));
+        m.insert("HgTe_palik".to_string(), ("4.77919, 3.23163, 2.66017".to_string(), "1.63198, 1.58015, 1.72981".to_string()));
+        m.insert("HgTe".to_string(), ("4.77919, 3.23163, 2.66017".to_string(), "1.63198, 1.58015, 1.72981".to_string()));
+        m.insert("Hg".to_string(), ("2.42652, 1.45642, 0.914459".to_string(), "6.34803, 4.39248, 3.42748".to_string()));
+        m.insert("Ir_palik".to_string(), ("3.08243, 2.08491, 1.62028".to_string(), "5.59771, 4.06635, 3.27186".to_string()));
+        m.insert("Ir".to_string(), ("3.08243, 2.08491, 1.62028".to_string(), "5.59771, 4.06635, 3.27186".to_string()));
+        m.insert("K_palik".to_string(), ("0.0621071, 0.0466027, 0.0384292".to_string(), "2.12697, 1.3591, 0.9177".to_string()));
+        m.insert("K".to_string(), ("0.0621071, 0.0466027, 0.0384292".to_string(), "2.12697, 1.3591, 0.9177".to_string()));
+        m.insert("Li_palik".to_string(), ("0.269451, 0.200441, 0.223339".to_string(), "3.54131, 2.3517, 1.68708".to_string()));
+        m.insert("Li".to_string(), ("0.269451, 0.200441, 0.223339".to_string(), "3.54131, 2.3517, 1.68708".to_string()));
+        m.insert("MgO_palik".to_string(), ("2.08988, 1.65047, 1.5956".to_string(), "4.38534e-12, -3.64587e-12, 2.53198e-11".to_string()));
+        m.insert("MgO".to_string(), ("2.08988, 1.65047, 1.5956".to_string(), "4.38534e-12, -3.64587e-12, 2.53198e-11".to_string()));
+        m.insert("Mo_palik".to_string(), ("4.49907, 3.51237, 2.78469".to_string(), "4.12556, 3.4205, 3.15286".to_string()));
+        m.insert("Mo".to_string(), ("4.49907, 3.51237, 2.78469".to_string(), "4.12556, 3.4205, 3.15286".to_string()));
+        m.insert("Na_palik".to_string(), ("0.0607451, 0.0557257, 0.061748".to_string(), "3.20798, 2.12669, 1.58797".to_string()));
+        m.insert("Nb_palik".to_string(), ("3.40884, 2.78681, 2.39788".to_string(), "3.44282, 2.73855, 2.57476".to_string()));
+        m.insert("Nb".to_string(), ("3.40884, 2.78681, 2.39788".to_string(), "3.44282, 2.73855, 2.57476".to_string()));
+        m.insert("Ni_palik".to_string(), ("2.36454, 1.66584, 1.46819".to_string(), "4.48772, 3.05528, 2.34846".to_string()));
+        m.insert("Rh_palik".to_string(), ("2.59089, 1.86185, 1.55039".to_string(), "6.79501, 4.70811, 3.9766".to_string()));
+        m.insert("Rh".to_string(), ("2.59089, 1.86185, 1.55039".to_string(), "6.79501, 4.70811, 3.9766".to_string()));
+        m.insert("Se-e_palik".to_string(), ("5.56086, 4.22302, 4.0475".to_string(), "0.761602, 1.0705, 1.5996".to_string()));
+        m.insert("Se-e".to_string(), ("5.56086, 4.22302, 4.0475".to_string(), "0.761602, 1.0705, 1.5996".to_string()));
+        m.insert("Se_palik".to_string(), ("3.9737, 2.88842, 2.82447".to_string(), "0.631111, 0.6311, 0.54084".to_string()));
+        m.insert("Se".to_string(), ("3.9737, 2.88842, 2.82447".to_string(), "0.631111, 0.6311, 0.54084".to_string()));
+        m.insert("SiC_palik".to_string(), ("3.17069, 2.52702, 2.47947".to_string(), "1.54029e-06, -1.49586e-06, 1.47636e-05".to_string()));
+        m.insert("SiC".to_string(), ("3.17069, 2.52702, 2.47947".to_string(), "1.54029e-06, -1.49586e-06, 1.47636e-05".to_string()));
+        m.insert("SnTe_palik".to_string(), ("4.538, 1.9804, 1.2824".to_string(), "0, 0, 0".to_string()));
+        m.insert("SnTe".to_string(), ("4.538, 1.9804, 1.2824".to_string(), "0, 0, 0".to_string()));
+        m.insert("Ta_palik".to_string(), ("2.05979, 2.38107, 2.62559".to_string(), "2.43996, 1.74619, 1.94588".to_string()));
+        m.insert("Ta".to_string(), ("2.05979, 2.38107, 2.62559".to_string(), "2.43996, 1.74619, 1.94588".to_string()));
+        m.insert("Te-e_palik".to_string(), ("7.48425, 4.31476, 2.37063".to_string(), "5.59077, 4.93514, 4.00092".to_string()));
+        m.insert("Te-e".to_string(), ("7.48425, 4.31476, 2.37063".to_string(), "5.59077, 4.93514, 4.00092".to_string()));
+        m.insert("Te_palik".to_string(), ("7.36846, 4.4946, 2.63798".to_string(), "3.26738, 3.51453, 3.2917".to_string()));
+        m.insert("Te".to_string(), ("7.36846, 4.4946, 2.63798".to_string(), "3.26738, 3.51453, 3.2917".to_string()));
+        m.insert("ThF4_palik".to_string(), ("1.83057, 1.44222, 1.38804".to_string(), "0, 0, 0".to_string()));
+        m.insert("ThF4".to_string(), ("1.83057, 1.44222, 1.38804".to_string(), "0, 0, 0".to_string()));
+        m.insert("TiC_palik".to_string(), ("3.82591, 2.83346, 2.59154".to_string(), "3.18532, 2.41109, 2.1752".to_string()));
+        m.insert("TiC".to_string(), ("3.82591, 2.83346, 2.59154".to_string(), "3.18532, 2.41109, 2.1752".to_string()));
+        m.insert("TiN_palik".to_string(), ("1.70939, 1.20202, 1.35264".to_string(), "3.02375, 2.10671, 1.1688".to_string()));
+        m.insert("TiN".to_string(), ("1.70939, 1.20202, 1.35264".to_string(), "3.02375, 2.10671, 1.1688".to_string()));
+        m.insert("TiO2-e_palik".to_string(), ("3.10648, 2.51369, 2.585".to_string(), "6.15808e-05, -5.38042e-05, 0.000381368".to_string()));
+        m.insert("TiO2-e".to_string(), ("3.10648, 2.51369, 2.585".to_string(), "6.15808e-05, -5.38042e-05, 0.000381368".to_string()));
+        m.insert("TiO2_palik".to_string(), ("3.45676, 2.80243, 2.90704".to_string(), "0.000130815, -0.000114216, 0.000809353".to_string()));
+        m.insert("TiO2".to_string(), ("3.45676, 2.80243, 2.90704".to_string(), "0.000130815, -0.000114216, 0.000809353".to_string()));
+        m.insert("VC_palik".to_string(), ("3.67232, 2.77627, 2.53826".to_string(), "2.97645, 2.25387, 1.97359".to_string()));
+        m.insert("VC".to_string(), ("3.67232, 2.77627, 2.53826".to_string(), "2.97645, 2.25387, 1.97359".to_string()));
+        m.insert("VN_palik".to_string(), ("2.87842, 2.14604, 1.94788".to_string(), "2.83558, 2.13656, 1.64581".to_string()));
+        m.insert("VN".to_string(), ("2.87842, 2.14604, 1.94788".to_string(), "2.83558, 2.13656, 1.64581".to_string()));
+        m.insert("V_palik".to_string(), ("4.27582, 3.50453, 2.76487".to_string(), "3.50165, 2.89143, 3.10752".to_string()));
+        m.insert("W".to_string(), ("4.37464, 3.29988, 2.99998".to_string(), "3.49872, 2.60604, 2.27449".to_string()));
+        m
+    };
+}
+
 pub struct RGB {
     pub r: f32,
     pub g: f32,
@@ -76,7 +155,7 @@ fn hex_to_int(c: char) -> i8 {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Spectrum {
     pub value: String,
 }
@@ -653,6 +732,22 @@ impl BSDF {
                     &textures,
                     scene,
                 );
+
+                // If we use the default parameter, we will try
+                // an alternative name
+                let reflectance =
+                    if reflectance == BSDFColorSpectrum::Constant(Spectrum::from_f32(0.5)) {
+                        read_value_or_texture_spectrum(
+                            &mut map,
+                            "diffuseReflectance",
+                            Value::Spectrum(Spectrum::from_f32(0.5)),
+                            &textures,
+                            scene,
+                        )
+                    } else {
+                        reflectance
+                    };
+
                 BSDF::Diffuse { reflectance }
             }
             "dielectric" | "roughdielectric" | "thindielectric" => {
@@ -825,8 +920,58 @@ impl BSDF {
                 BSDF::MixtureBSDF { weights, bsdfs }
             }
             "conductor" | "roughconductor" => {
-                skipping_entry(event);
-                BSDF::default()
+                // Conductor {
+                //     distribution: Option<Distribution>,
+                //     // Potentially read values from materials
+                //     eta: Spectrum,
+                //     k: Spectrum,
+                //     // Other
+                //     ext_eta: f32,                            // Air
+                //     specular_reflectance: BSDFColorSpectrum, // s(1.0)
+                // },
+                let (mut map, refs) = values_fn(event, true, f_texture);
+                assert!(refs.is_empty());
+                let distribution = if bsdf_type == "roughplastic" {
+                    Some(Distribution::parse(&mut map, scene))
+                } else {
+                    None
+                };
+
+                let (eta, k) = match map.remove("material") {
+                    None => {
+                        // Read from the fields
+                        let eta = map.remove("eta").unwrap().as_spectrum();
+                        let k = map.remove("k").unwrap().as_spectrum();
+                        (eta, k)
+                    }
+                    Some(v) => {
+                        let v = v.as_string();
+                        let (eta, k) = MATERIALS.get(&v).unwrap();
+                        (
+                            Spectrum { value: eta.clone() },
+                            Spectrum { value: k.clone() },
+                        )
+                    }
+                };
+
+                let ext_eta =
+                    read_value(&mut map, "extEta", Value::String("air".to_string())).as_ior();
+
+                let specular_reflectance = read_value_or_texture_spectrum(
+                    &mut map,
+                    "specularReflectance",
+                    Value::Spectrum(Spectrum::from_f32(1.0)),
+                    &textures,
+                    scene,
+                );
+
+                BSDF::Conductor {
+                    distribution,
+                    eta,
+                    k,
+                    ext_eta,
+                    specular_reflectance,
+                }
             }
             _ => panic!("Unsupported material {}", bsdf_type),
         }
@@ -1674,6 +1819,12 @@ mod tests {
     #[test]
     fn kitchen() {
         let s = "./data/kitchen.xml";
+        print_scene(crate::parse(s));
+    }
+
+    #[test]
+    fn issue_golden() {
+        let s = "./data/issue_golden.xml";
         print_scene(crate::parse(s));
     }
 }
