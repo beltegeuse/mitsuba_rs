@@ -9,6 +9,8 @@ extern crate miniz_oxide;
 #[cfg(feature = "serialized")]
 #[macro_use]
 extern crate bitflags;
+#[cfg(feature = "ply")]
+extern crate ply_rs;
 
 use cgmath::*;
 use std::collections::HashMap;
@@ -1648,6 +1650,8 @@ impl Scene {
 
 #[cfg(feature = "serialized")]
 pub mod serialized;
+#[cfg(feature = "ply")]
+pub mod ply;
 
 fn parse_scene(filename: &str, mut scene: &mut Scene) {
     let file = File::open(filename).unwrap();
@@ -1724,6 +1728,22 @@ fn parse_scene(filename: &str, mut scene: &mut Scene) {
                             scene.shapes_unamed.push(shape);
                         }
                     }
+                }
+                "ply" => {
+                    // This flag is from Mitsuba2 (exporter from blender)
+                    let filename = found_attrib(&attributes, "filename").unwrap();
+                    scene.shapes_unamed.push( Shape::Ply {
+                        filename, 
+                        face_normal: false,
+                        max_smooth_angle: None,
+                        srgb: true,
+                        option: ShapeOption {
+                            flip_normal: false,
+                            bsdf: None,
+                            to_world: None,
+                            emitter: None,
+                        }
+                    }); 
                 }
                 _ => panic!("Unsupported primitive type {} {:?}", name, attributes),
             },
@@ -1825,6 +1845,12 @@ mod tests {
     #[test]
     fn issue_golden() {
         let s = "./data/issue_golden.xml";
+        print_scene(crate::parse(s));
+    }
+
+    #[test]
+    fn mitsuba2() {
+        let s = "./data/blender_mts2.xml";
         print_scene(crate::parse(s));
     }
 }
