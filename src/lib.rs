@@ -338,6 +338,23 @@ fn found_attrib(attrs: &Vec<xml::attribute::OwnedAttribute>, name: &str) -> Opti
     }
     None
 }
+
+fn found_attrib_panic(
+    attrs: &Vec<xml::attribute::OwnedAttribute>,
+    name: &str,
+    additional_info: &str,
+) -> String {
+    for a in attrs {
+        if a.name.local_name == name {
+            return a.value.clone();
+        }
+    }
+    panic!(
+        "Impossible to found {} attribute when parsing {}",
+        name, additional_info
+    );
+}
+
 fn found_attrib_or(
     attrs: &Vec<xml::attribute::OwnedAttribute>,
     name: &str,
@@ -413,41 +430,51 @@ where
                 name, attributes, ..
             }) => match name.local_name.as_str() {
                 "float" => {
-                    let name = found_attrib(&attributes, "name").unwrap();
-                    let value = found_attrib(&attributes, "value").unwrap();
-                    let value = value.parse::<f32>().unwrap();
+                    let name = found_attrib_panic(&attributes, "name", "float");
+                    let value = found_attrib_panic(&attributes, "value", "float");
+                    let value = value
+                        .parse::<f32>()
+                        .expect(&format!("Impossible to convert {} to f32", value));
                     map.insert(name, Value::Float(value));
                     opened = true;
                 }
                 "integer" => {
-                    let name = found_attrib(&attributes, "name").unwrap();
-                    let value = found_attrib(&attributes, "value").unwrap();
-                    let value = value.parse::<i32>().unwrap();
+                    let name = found_attrib_panic(&attributes, "name", "integer");
+                    let value = found_attrib_panic(&attributes, "value", "integer");
+                    let value = value
+                        .parse::<i32>()
+                        .expect(&format!("Impossible to convert {} to i32", value));
                     map.insert(name, Value::Integer(value));
                     opened = true;
                 }
                 "boolean" => {
-                    let name = found_attrib(&attributes, "name").unwrap();
-                    let value = found_attrib(&attributes, "value").unwrap();
+                    let name = found_attrib_panic(&attributes, "name", "boolean");
+                    let value = found_attrib_panic(&attributes, "value", "boolean");
+                    if value != "true" && value != "false" {
+                        panic!(
+                            "The boolean param '{}' with value '{}' is not a boolean",
+                            name, value
+                        );
+                    }
                     let value = value == "true";
                     map.insert(name, Value::Boolean(value));
                     opened = true;
                 }
                 "spectrum" => {
-                    let name = found_attrib(&attributes, "name").unwrap();
-                    let value = found_attrib(&attributes, "value").unwrap();
+                    let name = found_attrib_panic(&attributes, "name", "spectrum");
+                    let value = found_attrib_panic(&attributes, "value", "spectrum");
                     map.insert(name, Value::Spectrum(Spectrum { value }));
                     opened = true;
                 }
                 "rgb" => {
-                    let name = found_attrib(&attributes, "name").unwrap();
-                    let value = found_attrib(&attributes, "value").unwrap();
+                    let name = found_attrib_panic(&attributes, "name", "rgb");
+                    let value = found_attrib_panic(&attributes, "value", "rgb");
                     map.insert(name, Value::Spectrum(Spectrum::from_rgb(value)));
                     opened = true;
                 }
                 "ref" => {
                     let name = found_attrib(&attributes, "name");
-                    let value = found_attrib(&attributes, "id").unwrap();
+                    let value = found_attrib_panic(&attributes, "id", "ref");
                     match name {
                         Some(v) => {
                             map.insert(v, Value::Ref(value));
@@ -459,7 +486,7 @@ where
                     opened = true;
                 }
                 "vector" => {
-                    let name = found_attrib(&attributes, "name").unwrap();
+                    let name = found_attrib_panic(&attributes, "name", "vector");
                     let x = found_attrib(&attributes, "x")
                         .unwrap_or("0.0".to_string())
                         .parse::<f32>()
@@ -476,7 +503,7 @@ where
                     opened = true;
                 }
                 "point" => {
-                    let name = found_attrib(&attributes, "name").unwrap();
+                    let name = found_attrib_panic(&attributes, "name", "point");
                     let x = found_attrib(&attributes, "x")
                         .unwrap_or("0.0".to_string())
                         .parse::<f32>()
@@ -493,8 +520,8 @@ where
                     opened = true;
                 }
                 "string" => {
-                    let name = found_attrib(&attributes, "name").unwrap();
-                    let value = found_attrib(&attributes, "value").unwrap();
+                    let name = found_attrib_panic(&attributes, "name", "string");
+                    let value = found_attrib_panic(&attributes, "value", "string");
                     map.insert(name, Value::String(value));
                     opened = true;
                 }
@@ -1544,7 +1571,7 @@ impl Transform {
                             dir.y, dir.z, 0.0, origin.x, origin.y, origin.z, 1.0,
                         )
                         .inverse_transform()
-                        .unwrap();
+                        .expect("inverse transform for lookat failed");
 
                         trans = trans * matrix;
                         opened += 1;
@@ -1612,7 +1639,10 @@ impl Sensor {
         let (mut map, refs) = values_fn(events, false, f);
         assert!(refs.is_empty());
 
-        let fov = map.remove("fov").unwrap().as_float();
+        let fov = map
+            .remove("fov")
+            .expect("Impossible to found 'fov'")
+            .as_float();
         let fov_axis = read_value(&mut map, "fovAxis", Value::String("x".to_string())).as_string();
         let shutter_open = read_value(&mut map, "shutterOpen", Value::Float(0.0)).as_float();
         let shutter_close = read_value(&mut map, "shutterClose", Value::Float(0.0)).as_float();
@@ -1648,13 +1678,13 @@ impl Scene {
     // }
 }
 
-#[cfg(feature = "serialized")]
-pub mod serialized;
 #[cfg(feature = "ply")]
 pub mod ply;
+#[cfg(feature = "serialized")]
+pub mod serialized;
 
 fn parse_scene(filename: &str, mut scene: &mut Scene) {
-    let file = File::open(filename).unwrap();
+    let file = File::open(filename).expect(&format!("Impossible to open {}", filename));
     let file = BufReader::new(file);
 
     let parser = EventReader::new(file);
@@ -1671,23 +1701,23 @@ fn parse_scene(filename: &str, mut scene: &mut Scene) {
                 name, attributes, ..
             }) => match name.local_name.as_str() {
                 "bsdf" => {
-                    let bsdf_type = found_attrib(&attributes, "type").unwrap();
-                    let bsdf_id = found_attrib(&attributes, "id").unwrap();
+                    let bsdf_type = found_attrib_panic(&attributes, "type", "bsdf");
+                    let bsdf_id = found_attrib_panic(&attributes, "id", "bsdf");
                     let bsdf = BSDF::parse(&mut iter, &bsdf_type, &mut scene);
                     scene.bsdfs.insert(bsdf_id, bsdf);
                 }
                 "texture" => {
-                    let texture_id = found_attrib(&attributes, "id").unwrap();
+                    let texture_id = found_attrib_panic(&attributes, "id", "texture");
                     let texture = Texture::parse(&mut iter);
                     scene.textures.insert(texture_id, texture);
                 }
                 "sensor" => {
-                    let sensor_type = found_attrib(&attributes, "type").unwrap();
+                    let sensor_type = found_attrib_panic(&attributes, "type", "sensor");
                     let sensor = Sensor::parse(&mut iter, &sensor_type);
                     scene.sensors.push(sensor);
                 }
                 "emitter" => {
-                    let emitter_type = found_attrib(&attributes, "type").unwrap();
+                    let emitter_type = found_attrib_panic(&attributes, "type", "emitter");
                     let emitter = Emitter::parse(&mut iter, &emitter_type);
                     scene.emitters.push(emitter);
                 }
@@ -1705,7 +1735,7 @@ fn parse_scene(filename: &str, mut scene: &mut Scene) {
                 }
                 "include" => {
                     // Read a new file
-                    let other_filename = found_attrib(&attributes, "filename").unwrap();
+                    let other_filename = found_attrib_panic(&attributes, "filename", "include");
                     let filename = std::path::Path::new(filename)
                         .parent()
                         .unwrap()
@@ -1717,7 +1747,7 @@ fn parse_scene(filename: &str, mut scene: &mut Scene) {
                     skipping_entry(&mut iter);
                 }
                 "shape" => {
-                    let shape_type = found_attrib(&attributes, "type").unwrap();
+                    let shape_type = found_attrib_panic(&attributes, "type", "shape");
                     let shape_id = found_attrib(&attributes, "id");
                     let shape = Shape::parse(&mut iter, &shape_type, &mut scene);
                     match shape_id {
@@ -1731,9 +1761,9 @@ fn parse_scene(filename: &str, mut scene: &mut Scene) {
                 }
                 "ply" => {
                     // This flag is from Mitsuba2 (exporter from blender)
-                    let filename = found_attrib(&attributes, "filename").unwrap();
-                    scene.shapes_unamed.push( Shape::Ply {
-                        filename, 
+                    let filename = found_attrib_panic(&attributes, "filename", "ply");
+                    scene.shapes_unamed.push(Shape::Ply {
+                        filename,
                         face_normal: false,
                         max_smooth_angle: None,
                         srgb: true,
@@ -1742,8 +1772,8 @@ fn parse_scene(filename: &str, mut scene: &mut Scene) {
                             bsdf: None,
                             to_world: None,
                             emitter: None,
-                        }
-                    }); 
+                        },
+                    });
                 }
                 _ => panic!("Unsupported primitive type {} {:?}", name, attributes),
             },
@@ -1851,6 +1881,18 @@ mod tests {
     #[test]
     fn mitsuba2() {
         let s = "./data/blender_mts2.xml";
+        print_scene(crate::parse(s));
+    }
+
+    #[test]
+    fn default() {
+        let s = "./data/da_morton.xml";
+        print_scene(crate::parse(s));
+    }
+
+    #[test]
+    fn include_complex() {
+        let s = "./data/necklace_include.xml";
         print_scene(crate::parse(s));
     }
 }

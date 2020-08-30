@@ -106,9 +106,11 @@ pub fn read_ply(filename: &std::path::Path) -> PlyLoaded {
     let vertex_parser = parser::Parser::<PlyVertex>::new();
     let face_parser = parser::Parser::<PlyFace>::new();
     // read the header
-    let header = vertex_parser.read_header(&mut f).unwrap();
+    let header = vertex_parser
+        .read_header(&mut f)
+        .expect("Failed to read PLY header");
     // dbg!(&header.obj_infos);
-    // dbg!(&header.comments); 
+    // dbg!(&header.comments);
     let mut vertex_list = Vec::new();
     let mut face_list = Vec::new();
     for (_ignore_key, element) in &header.elements {
@@ -117,12 +119,12 @@ pub fn read_ply(filename: &std::path::Path) -> PlyLoaded {
             "vertex" => {
                 vertex_list = vertex_parser
                     .read_payload_for_element(&mut f, &element, &header)
-                    .unwrap();
+                    .expect("Failed to read vertex info ('vertex')");
             }
             "face" => {
                 face_list = face_parser
                     .read_payload_for_element(&mut f, &element, &header)
-                    .unwrap();
+                    .expect("Failed to read face info ('face')");
             }
             _ => panic!("Unexpeced element!"),
         }
