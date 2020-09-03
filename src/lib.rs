@@ -11,6 +11,8 @@ extern crate miniz_oxide;
 extern crate bitflags;
 #[cfg(feature = "ply")]
 extern crate ply_rs;
+#[macro_use]
+extern crate quick_error;
 
 use cgmath::*;
 use std::collections::HashMap;
@@ -18,6 +20,24 @@ use std::fs::File;
 use std::io::BufReader;
 use std::io::Read;
 use xml::reader::{EventReader, Events, XmlEvent};
+
+quick_error! {
+    #[derive(Debug)]
+    pub enum Error {
+        /// Spectrum to RGB conversion error
+        RGB(reason: &'static str, value: String) {
+            display("RGB error: {} (value: {})", reason, value)
+        }
+        /// Value to Concrete type error
+        Value(attempt: &'static str, value: Value) {
+            display("Value error: {} (value: {:?})", attempt, value)
+        }
+        /// Other error
+        Other(err: Box<dyn std::error::Error>) {
+            source(&**err)
+        }
+    }
+}
 
 lazy_static! {
     static ref IOR_DATA: HashMap<String, f32> = {
@@ -172,16 +192,16 @@ impl Spectrum {
         Self { value: s }
     }
 
-    pub fn as_rgb(self) -> RGB {
+    pub fn as_rgb(self) -> Result<RGB, Error> {
         // Mitsuba allow to give RGB values that can be true spectrum
         // where values are defined for wavelenght.
         // We do not support yet transformation between these spectrum
         // and RGB values
         if let Some(_) = self.value.find(":") {
-            panic!(
-                "True spectrum values are not supported yet! {:?}",
-                self.value
-            );
+            return Err(Error::RGB(
+                "True spectrum values are not supported yet!",
+                self.value,
+            ));
         }
 
         // Kinda anoying but Mitsuba allow multiple way to specify the
@@ -197,17 +217,16 @@ impl Spectrum {
             // Conversion "#rrggbb" into rgb
             let values = self.value.trim().chars().skip(1);
             let values = values.collect::<Vec<_>>();
-            assert_eq!(values.len(), 6);
+            if values.len() != 6 {
+                return Err(Error::RGB("HEX color is not in proper format", self.value));
+            }
             // Process by pairs
             values
                 .chunks_exact(2)
                 .map(|v| {
-                    let (v1, v2) = match v[..] {
-                        [v1, v2] => (v1, v2),
-                        _ => panic!("chunks_exact failed?"),
-                    };
-                    let v1 = hex_to_int(v1);
-                    let v2 = hex_to_int(v2);
+                    let (v1, v2) = unsafe { (v.get_unchecked(0), v.get_unchecked(1)) };
+                    let v1 = hex_to_int(*v1);
+                    let v2 = hex_to_int(*v2);
                     let v = v2 as i32 * 10 + v1 as i32;
                     v as f32 / 255.0
                 })
@@ -221,9 +240,9 @@ impl Spectrum {
         };
 
         match values[..] {
-            [r, g, b] => RGB { r, g, b },
-            [v] => RGB { r: v, g: v, b: v },
-            _ => panic!("Impossible to convert to RGB {:?}", values),
+            [r, g, b] => Ok(RGB { r, g, b }),
+            [v] => Ok(RGB { r: v, g: v, b: v }),
+            _ => Err(Error::RGB("Impossible to convert to RGB", self.value)),
         }
     }
 }
@@ -705,8 +724,10 @@ impl BSDF {
             match t {
                 "texture" => {
                     let texture_name = attrs.get("name").unwrap();
+                    let texture_type = attrs.get("type").unwrap();
+
                     let texture_id = attrs.get("id");
-                    let texture = Texture::parse(events);
+                    let texture = Texture::parse(events, &texture_type);
                     textures.insert(texture_name.clone(), texture.clone());
                     if let Some(id) = texture_id {
                         // If there is an id, we need to include it
@@ -1008,27 +1029,106 @@ impl BSDF {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Texture {
-    pub filename: String,
-    pub filter_type: String,
-    pub gamma: f32,
+pub enum TextureScale {
+    Texture(Box<Texture>),
+    Spectrum(Spectrum),
+    Float(f32),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Texture {
+    Bitmap {
+        /// TODO: wrapMode,
+        /// maxAnisotropy,
+        /// cache,
+        /// channel
+        filename: String,
+        filter_type: String,
+        gamma: f32,
+        offset: Vector2<f32>,
+        scale: Vector2<f32>,
+    },
+    Checkerboard {
+        color0: Spectrum, // 0.4
+        color1: Spectrum, // 0.2
+        offset: Vector2<f32>,
+        scale: Vector2<f32>,
+    },
+    GridTexture {
+        color0: Spectrum, // 0.4
+        color1: Spectrum, // 0.2
+        line_width: f32,  // 0.01
+        offset: Vector2<f32>,
+        scale: Vector2<f32>,
+    },
+    // TODO: Implement scale
+    Scale {
+        texture: Box<Texture>,
+        value: TextureScale,
+    },
 }
 impl Texture {
-    pub fn parse<R: Read>(events: &mut Events<R>) -> Self {
+    pub fn parse<R: Read>(events: &mut Events<R>, texture_type: &str) -> Self {
         let (mut map, refs) = values(events, true);
         assert!(refs.is_empty());
-        let filename = map.remove("filename").unwrap().as_string();
-        let filter_type = read_value(
-            &mut map,
-            "filterType",
-            Value::String("trilinear".to_string()),
-        )
-        .as_string();
-        let gamma = read_value(&mut map, "alpha", Value::Float(1.0)).as_float();
-        Texture {
-            filename,
-            filter_type,
-            gamma,
+
+        // Read offset and scale
+        let uoffset = read_value(&mut map, "uoffset", Value::Float(0.0)).as_float();
+        let voffset = read_value(&mut map, "voffset", Value::Float(0.0)).as_float();
+        let uscale = read_value(&mut map, "uscale", Value::Float(1.0)).as_float();
+        let vscale = read_value(&mut map, "vscale", Value::Float(1.0)).as_float();
+        let offset = Vector2::new(uoffset, voffset);
+        let scale = Vector2::new(uscale, vscale);
+
+        match texture_type {
+            "bitmap" => {
+                let filename = map.remove("filename").unwrap().as_string();
+                let filter_type = read_value(
+                    &mut map,
+                    "filterType",
+                    Value::String("trilinear".to_string()),
+                )
+                .as_string();
+                let gamma = read_value(&mut map, "alpha", Value::Float(1.0)).as_float();
+                Texture::Bitmap {
+                    filename,
+                    filter_type,
+                    gamma,
+                    offset,
+                    scale,
+                }
+            }
+            "checkerboard" => {
+                let color0 =
+                    read_value(&mut map, "color0", Value::Spectrum(Spectrum::from_f32(0.4)))
+                        .as_spectrum();
+                let color1 =
+                    read_value(&mut map, "color1", Value::Spectrum(Spectrum::from_f32(0.2)))
+                        .as_spectrum();
+                Texture::Checkerboard {
+                    color0,
+                    color1,
+                    offset,
+                    scale,
+                }
+            }
+            "gridtexture" => {
+                let color0 =
+                    read_value(&mut map, "color0", Value::Spectrum(Spectrum::from_f32(0.4)))
+                        .as_spectrum();
+                let color1 =
+                    read_value(&mut map, "color1", Value::Spectrum(Spectrum::from_f32(0.2)))
+                        .as_spectrum();
+                let line_width = read_value(&mut map, "lineWidth", Value::Float(0.01)).as_float();
+                Texture::GridTexture {
+                    color0,
+                    color1,
+                    line_width,
+                    offset,
+                    scale,
+                }
+            }
+            _ => panic!("Unsupported texture type: {}", texture_type),
         }
     }
 }
@@ -1708,7 +1808,8 @@ fn parse_scene(filename: &str, mut scene: &mut Scene) {
                 }
                 "texture" => {
                     let texture_id = found_attrib_panic(&attributes, "id", "texture");
-                    let texture = Texture::parse(&mut iter);
+                    let texture_type = found_attrib_panic(&attributes, "type", "texture");
+                    let texture = Texture::parse(&mut iter, &texture_type);
                     scene.textures.insert(texture_id, texture);
                 }
                 "sensor" => {
@@ -1879,6 +1980,12 @@ mod tests {
     }
 
     #[test]
+    fn texture_checkboard() {
+        let s = "./data/veach-door.xml";
+        print_scene(crate::parse(s));
+    }
+
+    #[test]
     fn mitsuba2() {
         let s = "./data/blender_mts2.xml";
         print_scene(crate::parse(s));
@@ -1894,5 +2001,23 @@ mod tests {
     fn include_complex() {
         let s = "./data/necklace_include.xml";
         print_scene(crate::parse(s));
+    }
+
+    #[test]
+    fn spectrum_to_rgb_failed() {
+        let s = crate::Spectrum {
+            value: "0.01, 0.2".to_string(),
+        };
+        let res = s.as_rgb();
+        assert!(res.is_err())
+    }
+
+    #[test]
+    fn spectrum_to_rgb_ok() {
+        let s = crate::Spectrum {
+            value: "0.01, 0.2, 0.3".to_string(),
+        };
+        let res = s.as_rgb();
+        assert!(res.is_ok())
     }
 }
