@@ -266,58 +266,30 @@ pub enum Value {
     Boolean(bool),
     Ref(String),
 }
+
+macro_rules! value_as {
+    ( $name:ident, $value:path => $target:ty ) => {
+        impl Value {
+            pub fn $name(self) -> Result<$target, Error> {
+                match self {
+                    $value(s) => Ok(s),
+                    _ => Err(Error::Value(stringify!($name), self)),
+                }
+            }
+        }
+    };
+}
+
+value_as!(as_string, Value::String => String);
+value_as!(as_ref, Value::Ref => String);
+value_as!(as_float, Value::Float => f32);
+value_as!(as_int, Value::Integer => i32);
+value_as!(as_bool, Value::Boolean => bool);
+value_as!(as_spectrum, Value::Spectrum => Spectrum);
+value_as!(as_vec, Value::Vector => Vector3<f32>);
+value_as!(as_point, Value::Point => Point3<f32>);
+
 impl Value {
-    pub fn as_string(self) -> String {
-        match self {
-            Value::Ref(s) | Value::String(s) => s,
-            _ => panic!("Wrong type {:?} (as_string)", self),
-        }
-    }
-    pub fn as_float(self) -> f32 {
-        match self {
-            Value::Float(s) => s,
-            _ => panic!("Wrong type {:?} (as_float)", self),
-        }
-    }
-    pub fn as_int(self) -> i32 {
-        match self {
-            Value::Integer(s) => s,
-            _ => panic!("Wrong type {:?} (as_int)", self),
-        }
-    }
-    pub fn as_bool(self) -> bool {
-        match self {
-            Value::Boolean(s) => s,
-            _ => panic!("Wrong type {:?} (as_bool)", self),
-        }
-    }
-    pub fn as_spectrum(self) -> Spectrum {
-        match self {
-            Value::Spectrum(s) => s,
-            _ => panic!("Wrong type {:?} (as_spectrum)", self),
-        }
-    }
-    pub fn as_vec(self) -> Vector3<f32> {
-        match self {
-            Value::Vector(v) => v,
-            _ => panic!("Wrong type {:?} (as_vec)", self),
-        }
-    }
-    pub fn as_point(self) -> Point3<f32> {
-        match self {
-            Value::Point(v) => v,
-            _ => panic!("Wrong type {:?} (as_point)", self),
-        }
-    }
-
-    // Check if it is a ref
-    pub fn is_ref(&self) -> bool {
-        match self {
-            Value::Ref(_) => true,
-            _ => false,
-        }
-    }
-
     // Conversions
     pub fn as_bsdf_color_spec(self, scene: &Scene) -> BSDFColorSpectrum {
         match self {
@@ -430,9 +402,9 @@ fn values_fn<R: Read, F>(
     events: &mut Events<R>,
     strict: bool,
     mut other: F,
-) -> (HashMap<String, Value>, Vec<String>)
+) -> Result<(HashMap<String, Value>, Vec<String>), Error>
 where
-    F: FnMut(&mut Events<R>, &str, HashMap<String, String>) -> bool,
+    F: FnMut(&mut Events<R>, &str, HashMap<String, String>) -> Result<bool, Error>,
 {
     let mut map = HashMap::new();
     let mut refs = Vec::new();
@@ -550,7 +522,7 @@ where
                         .iter()
                         .map(|a| (a.name.local_name.clone(), a.value.clone()))
                         .collect();
-                    let captured = other(iter, &name.local_name, map);
+                    let captured = other(iter, &name.local_name, map)?;
                     if !captured {
                         if strict {
                             panic!("{:?} encounter when parsing values", name)
@@ -563,7 +535,7 @@ where
             },
             Ok(XmlEvent::EndElement { .. }) => {
                 if !opened {
-                    return (map, refs);
+                    return Ok((map, refs));
                 }
                 opened = false;
             }
@@ -578,8 +550,11 @@ where
     }
 }
 
-fn values<R: Read>(events: &mut Events<R>, strict: bool) -> (HashMap<String, Value>, Vec<String>) {
-    let f = |_: &mut Events<R>, _: &str, _: HashMap<String, String>| false;
+fn values<R: Read>(
+    events: &mut Events<R>,
+    strict: bool,
+) -> Result<(HashMap<String, Value>, Vec<String>), Error> {
+    let f = |_: &mut Events<R>, _: &str, _: HashMap<String, String>| Ok(false);
     values_fn(events, strict, f)
 }
 
@@ -654,14 +629,14 @@ pub struct Distribution {
     pub alpha: Alpha,
 }
 impl Distribution {
-    fn parse(map: &mut HashMap<String, Value>, scene: &Scene) -> Self {
+    fn parse(map: &mut HashMap<String, Value>, scene: &Scene) -> Result<Self, Error> {
         let distribution =
-            read_value(map, "distribution", Value::String("beckmann".to_string())).as_string();
+            read_value(map, "distribution", Value::String("beckmann".to_string())).as_string()?;
         let alpha = Alpha::parse(map, scene);
-        Self {
+        Ok(Self {
             distribution,
             alpha,
-        }
+        })
     }
 }
 
@@ -733,17 +708,24 @@ impl BSDF {
             reflectance: BSDFColorSpectrum::Constant(Spectrum::from_f32(0.8)),
         }
     }
-    pub fn parse<R: Read>(event: &mut Events<R>, bsdf_type: &str, scene: &mut Scene) -> Self {
+    pub fn parse<R: Read>(
+        event: &mut Events<R>,
+        bsdf_type: &str,
+        scene: &mut Scene,
+    ) -> Result<Self, Error> {
         // Helpers for catch textures
         let mut textures = HashMap::new();
-        let f_texture = |events: &mut Events<R>, t: &str, attrs: HashMap<String, String>| -> bool {
+        let f_texture = |events: &mut Events<R>,
+                         t: &str,
+                         attrs: HashMap<String, String>|
+         -> Result<bool, Error> {
             match t {
                 "texture" => {
                     let texture_name = attrs.get("name").unwrap();
                     let texture_type = attrs.get("type").unwrap();
 
                     let texture_id = attrs.get("id");
-                    let texture = Texture::parse(events, &texture_type);
+                    let texture = Texture::parse(events, &texture_type)?;
                     textures.insert(texture_name.clone(), texture.clone());
                     if let Some(id) = texture_id {
                         // If there is an id, we need to include it
@@ -753,12 +735,12 @@ impl BSDF {
                 }
                 _ => panic!("Twosided encounter unexpected token {:?}", t),
             }
-            true
+            Ok(true)
         };
 
         match bsdf_type {
             "phong" => {
-                let (mut map, refs) = values_fn(event, true, f_texture);
+                let (mut map, refs) = values_fn(event, true, f_texture)?;
                 assert!(refs.is_empty());
                 let exponent = read_value_or_texture_f32(
                     &mut map,
@@ -781,14 +763,14 @@ impl BSDF {
                     &textures,
                     scene,
                 );
-                BSDF::Phong {
+                Ok(BSDF::Phong {
                     exponent,
                     specular_reflectance,
                     diffuse_reflectance,
-                }
+                })
             }
             "diffuse" => {
-                let (mut map, refs) = values_fn(event, true, f_texture);
+                let (mut map, refs) = values_fn(event, true, f_texture)?;
                 assert!(refs.is_empty());
 
                 let reflectance = read_value_or_texture_spectrum(
@@ -814,13 +796,13 @@ impl BSDF {
                         reflectance
                     };
 
-                BSDF::Diffuse { reflectance }
+                Ok(BSDF::Diffuse { reflectance })
             }
             "dielectric" | "roughdielectric" | "thindielectric" => {
-                let (mut map, refs) = values_fn(event, true, f_texture);
+                let (mut map, refs) = values_fn(event, true, f_texture)?;
                 assert!(refs.is_empty());
                 let distribution = if bsdf_type == "roughdielectric" {
-                    Some(Distribution::parse(&mut map, scene))
+                    Some(Distribution::parse(&mut map, scene)?)
                 } else {
                     None
                 };
@@ -845,41 +827,45 @@ impl BSDF {
                     scene,
                 );
 
-                BSDF::Dielectric {
+                Ok(BSDF::Dielectric {
                     distribution,
                     int_ior,
                     ext_ior,
                     specular_reflectance,
                     specular_transmittance,
                     thin,
-                }
+                })
             }
             "twosided" => {
                 // We need to parse the next element, including BSDF
                 let mut bsdfs = vec![];
-                let f = |events: &mut Events<R>, t: &str, attrs: HashMap<String, String>| -> bool {
+                let f = |events: &mut Events<R>,
+                         t: &str,
+                         attrs: HashMap<String, String>|
+                 -> Result<bool, Error> {
                     match t {
                         "bsdf" => {
                             let bsdf_type = attrs.get("type").unwrap();
-                            bsdfs.push(BSDF::parse(events, bsdf_type, scene));
+                            bsdfs.push(BSDF::parse(events, bsdf_type, scene)?);
                         }
                         _ => panic!("Twosided encounter unexpected token {:?}", t),
                     }
-                    true
+                    Ok(true)
                 };
-                let (map, refs) = values_fn(event, true, f);
+                let (map, refs) = values_fn(event, true, f)?;
                 assert!(refs.is_empty());
                 assert!(map.is_empty());
                 assert_eq!(bsdfs.len(), 1);
-                BSDF::TwoSided {
+
+                Ok(BSDF::TwoSided {
                     bsdf: Box::new(bsdfs[0].clone()),
-                }
+                })
             }
             "roughplastic" | "plastic" => {
-                let (mut map, refs) = values_fn(event, true, f_texture);
+                let (mut map, refs) = values_fn(event, true, f_texture)?;
                 assert!(refs.is_empty());
                 let distribution = if bsdf_type == "roughplastic" {
-                    Some(Distribution::parse(&mut map, scene))
+                    Some(Distribution::parse(&mut map, scene)?)
                 } else {
                     None
                 };
@@ -907,19 +893,20 @@ impl BSDF {
                     scene,
                 );
 
-                let nonlinear = read_value(&mut map, "nonlinear", Value::Boolean(false)).as_bool();
+                let nonlinear =
+                    read_value(&mut map, "nonlinear", Value::Boolean(false)).as_bool()?;
 
-                BSDF::Plastic {
+                Ok(BSDF::Plastic {
                     distribution,
                     int_ior,
                     ext_ior,
                     specular_reflectance,
                     diffuse_reflectance,
                     nonlinear,
-                }
+                })
             }
             "roughdiffuse" => {
-                let (mut map, refs) = values_fn(event, true, f_texture);
+                let (mut map, refs) = values_fn(event, true, f_texture)?;
                 assert!(refs.is_empty());
                 let reflectance = read_value_or_texture_spectrum(
                     &mut map,
@@ -936,32 +923,35 @@ impl BSDF {
                     scene,
                 );
                 let use_fast_approx =
-                    read_value(&mut map, "useFastApprox", Value::Boolean(false)).as_bool();
+                    read_value(&mut map, "useFastApprox", Value::Boolean(false)).as_bool()?;
 
-                BSDF::Roughtdiffuse {
+                Ok(BSDF::Roughtdiffuse {
                     reflectance,
                     alpha,
                     use_fast_approx,
-                }
+                })
             }
             "mixturebsdf" => {
                 // We need to parse the next element, including BSDF
                 let mut bsdfs = vec![];
-                let f = |events: &mut Events<R>, t: &str, attrs: HashMap<String, String>| -> bool {
+                let f = |events: &mut Events<R>,
+                         t: &str,
+                         attrs: HashMap<String, String>|
+                 -> Result<bool, Error> {
                     match t {
                         "bsdf" => {
                             let bsdf_type = attrs.get("type").unwrap();
-                            bsdfs.push(BSDF::parse(events, bsdf_type, scene));
+                            bsdfs.push(BSDF::parse(events, bsdf_type, scene)?);
                         }
                         _ => panic!("Twosided encounter unexpected token {:?}", t),
                     }
-                    true
+                    Ok(true)
                 };
-                let (mut map, refs) = values_fn(event, true, f);
+                let (mut map, refs) = values_fn(event, true, f)?;
                 assert!(refs.is_empty());
 
                 // Parse the weights
-                let weights = map.remove("weights").unwrap().as_string();
+                let weights = map.remove("weights").unwrap().as_string()?;
                 let weights = {
                     let trimed = weights.trim();
                     let splitted = if trimed.clone().split(",").count() > 1 {
@@ -978,18 +968,18 @@ impl BSDF {
                     // Certainly the different BSDF are with references
                     // Do the iterations based on names
                     for i in 0..weights.len() {
-                        let ref_name = map.remove(&format!("mat{}", i + 1)).unwrap().as_string();
+                        let ref_name = map.remove(&format!("mat{}", i + 1)).unwrap().as_ref()?;
                         bsdfs.push(scene.bsdfs.get(&ref_name).unwrap().clone());
                     }
                 }
 
-                BSDF::MixtureBSDF { weights, bsdfs }
+                Ok(BSDF::MixtureBSDF { weights, bsdfs })
             }
             "conductor" | "roughconductor" => {
-                let (mut map, refs) = values_fn(event, true, f_texture);
+                let (mut map, refs) = values_fn(event, true, f_texture)?;
                 assert!(refs.is_empty());
                 let distribution = if bsdf_type == "roughplastic" {
-                    Some(Distribution::parse(&mut map, scene))
+                    Some(Distribution::parse(&mut map, scene)?)
                 } else {
                     None
                 };
@@ -997,12 +987,12 @@ impl BSDF {
                 let (eta, k) = match map.remove("material") {
                     None => {
                         // Read from the fields
-                        let eta = map.remove("eta").unwrap().as_spectrum();
-                        let k = map.remove("k").unwrap().as_spectrum();
+                        let eta = map.remove("eta").unwrap().as_spectrum()?;
+                        let k = map.remove("k").unwrap().as_spectrum()?;
                         (eta, k)
                     }
                     Some(v) => {
-                        let v = v.as_string();
+                        let v = v.as_string()?;
                         let (eta, k) = MATERIALS.get(&v).unwrap();
                         (
                             Spectrum { value: eta.clone() },
@@ -1022,16 +1012,16 @@ impl BSDF {
                     scene,
                 );
 
-                BSDF::Conductor {
+                Ok(BSDF::Conductor {
                     distribution,
                     eta,
                     k,
                     ext_eta,
                     specular_reflectance,
-                }
+                })
             }
             "ward" => {
-                let (mut map, refs) = values_fn(event, true, f_texture);
+                let (mut map, refs) = values_fn(event, true, f_texture)?;
                 assert!(refs.is_empty());
 
                 let specular_reflectance = read_value_or_texture_spectrum(
@@ -1051,20 +1041,20 @@ impl BSDF {
                 let alpha = Alpha::parse(&mut map, scene);
                 let variant =
                     read_value(&mut map, "variant", Value::String("balanced".to_string()))
-                        .as_string();
+                        .as_string()?;
                 let variant = match &variant[..] {
                     "balanced" => WardVariant::Balanced,
                     "ward" => WardVariant::Ward,
                     "ward_duer" => WardVariant::WardDuer,
-                    _ => panic!("Wrong ward variant: {}", variant),
+                    _ => panic!("Wrong ward variant: {}", variant), // FIXME
                 };
 
-                BSDF::Ward {
+                Ok(BSDF::Ward {
                     specular_reflectance,
                     diffuse_reflectance,
                     alpha,
                     variant,
-                }
+                })
             }
             _ => panic!("Unsupported material {}", bsdf_type),
         }
@@ -1111,65 +1101,66 @@ pub enum Texture {
     },
 }
 impl Texture {
-    pub fn parse<R: Read>(events: &mut Events<R>, texture_type: &str) -> Self {
-        let (mut map, refs) = values(events, true);
+    pub fn parse<R: Read>(events: &mut Events<R>, texture_type: &str) -> Result<Self, Error> {
+        let (mut map, refs) = values(events, true)?;
         assert!(refs.is_empty());
 
         // Read offset and scale
-        let uoffset = read_value(&mut map, "uoffset", Value::Float(0.0)).as_float();
-        let voffset = read_value(&mut map, "voffset", Value::Float(0.0)).as_float();
-        let uscale = read_value(&mut map, "uscale", Value::Float(1.0)).as_float();
-        let vscale = read_value(&mut map, "vscale", Value::Float(1.0)).as_float();
+        let uoffset = read_value(&mut map, "uoffset", Value::Float(0.0)).as_float()?;
+        let voffset = read_value(&mut map, "voffset", Value::Float(0.0)).as_float()?;
+        let uscale = read_value(&mut map, "uscale", Value::Float(1.0)).as_float()?;
+        let vscale = read_value(&mut map, "vscale", Value::Float(1.0)).as_float()?;
         let offset = Vector2::new(uoffset, voffset);
         let scale = Vector2::new(uscale, vscale);
 
         match texture_type {
             "bitmap" => {
-                let filename = map.remove("filename").unwrap().as_string();
+                let filename = map.remove("filename").unwrap().as_string()?;
                 let filter_type = read_value(
                     &mut map,
                     "filterType",
                     Value::String("trilinear".to_string()),
                 )
-                .as_string();
-                let gamma = read_value(&mut map, "alpha", Value::Float(1.0)).as_float();
-                Texture::Bitmap {
+                .as_string()?;
+                let gamma = read_value(&mut map, "alpha", Value::Float(1.0)).as_float()?;
+                Ok(Texture::Bitmap {
                     filename,
                     filter_type,
                     gamma,
                     offset,
                     scale,
-                }
+                })
             }
             "checkerboard" => {
                 let color0 =
                     read_value(&mut map, "color0", Value::Spectrum(Spectrum::from_f32(0.4)))
-                        .as_spectrum();
+                        .as_spectrum()?;
                 let color1 =
                     read_value(&mut map, "color1", Value::Spectrum(Spectrum::from_f32(0.2)))
-                        .as_spectrum();
-                Texture::Checkerboard {
+                        .as_spectrum()?;
+                Ok(Texture::Checkerboard {
                     color0,
                     color1,
                     offset,
                     scale,
-                }
+                })
             }
             "gridtexture" => {
                 let color0 =
                     read_value(&mut map, "color0", Value::Spectrum(Spectrum::from_f32(0.4)))
-                        .as_spectrum();
+                        .as_spectrum()?;
                 let color1 =
                     read_value(&mut map, "color1", Value::Spectrum(Spectrum::from_f32(0.2)))
-                        .as_spectrum();
-                let line_width = read_value(&mut map, "lineWidth", Value::Float(0.01)).as_float();
-                Texture::GridTexture {
+                        .as_spectrum()?;
+                let line_width =
+                    read_value(&mut map, "lineWidth", Value::Float(0.01)).as_float()?;
+                Ok(Texture::GridTexture {
                     color0,
                     color1,
                     line_width,
                     offset,
                     scale,
-                }
+                })
             }
             _ => panic!("Unsupported texture type: {}", texture_type),
         }
@@ -1232,43 +1223,45 @@ pub enum Emitter {
     },
 }
 impl Emitter {
-    pub fn parse<R: Read>(events: &mut Events<R>, emitter_type: &str) -> Self {
+    pub fn parse<R: Read>(events: &mut Events<R>, emitter_type: &str) -> Result<Self, Error> {
         let mut to_world = Transform(Matrix4::one());
         // TODO: Texture
-        let f = |events: &mut Events<R>, t: &str, _: HashMap<String, String>| -> bool {
-            match t {
-                "transform" => to_world = Transform::parse(events),
-                _ => panic!("Unexpected token!"),
-            }
-            true
-        };
+        let f =
+            |events: &mut Events<R>, t: &str, _: HashMap<String, String>| -> Result<bool, Error> {
+                match t {
+                    "transform" => to_world = Transform::parse(events),
+                    _ => panic!("Unexpected token!"),
+                }
+                Ok(true)
+            };
 
-        let (mut map, refs) = values_fn(events, true, f);
+        let (mut map, refs) = values_fn(events, true, f)?;
         assert!(refs.is_empty());
 
-        let sampling_weight = read_value(&mut map, "samplingWeight", Value::Float(1.0)).as_float();
+        let sampling_weight =
+            read_value(&mut map, "samplingWeight", Value::Float(1.0)).as_float()?;
         match emitter_type {
             "area" => {
-                let radiance = map.remove("radiance").unwrap().as_spectrum();
-                Emitter::Area(AreaEmitter {
+                let radiance = map.remove("radiance").unwrap().as_spectrum()?;
+                Ok(Emitter::Area(AreaEmitter {
                     radiance,
                     sampling_weight,
-                })
+                }))
             }
             "point" => {
-                let position = map.remove("position").unwrap().as_point();
+                let position = map.remove("position").unwrap().as_point()?;
                 let intensity = read_value(
                     &mut map,
                     "intensity",
                     Value::Spectrum(Spectrum::from_f32(1.0)),
                 )
-                .as_spectrum();
-                Emitter::Point {
+                .as_spectrum()?;
+                Ok(Emitter::Point {
                     to_world,
                     position,
                     intensity,
                     sampling_weight,
-                }
+                })
             }
             "spot" => {
                 let intensity = read_value(
@@ -1276,74 +1269,74 @@ impl Emitter {
                     "intensity",
                     Value::Spectrum(Spectrum::from_f32(1.0)),
                 )
-                .as_spectrum();
+                .as_spectrum()?;
                 let cutoff_angle =
-                    read_value(&mut map, "cutoffAngle", Value::Float(20.0)).as_float();
+                    read_value(&mut map, "cutoffAngle", Value::Float(20.0)).as_float()?;
                 let beam_width = read_value(
                     &mut map,
                     "beamWidth",
                     Value::Float(cutoff_angle * 3.0 / 4.0),
                 )
-                .as_float();
+                .as_float()?;
                 let texture = None;
-                Emitter::Spot {
+                Ok(Emitter::Spot {
                     to_world,
                     intensity,
                     cutoff_angle,
                     beam_width,
                     texture,
                     sampling_weight,
-                }
+                })
             }
             "directional" => {
-                let direction = map.remove("direction").unwrap().as_vec();
+                let direction = map.remove("direction").unwrap().as_vec()?;
                 let irradiance = read_value(
                     &mut map,
                     "irradiance",
                     Value::Spectrum(Spectrum::from_f32(1.0)),
                 )
-                .as_spectrum();
-                Emitter::Directional {
+                .as_spectrum()?;
+                Ok(Emitter::Directional {
                     to_world,
                     direction,
                     irradiance,
                     sampling_weight,
-                }
+                })
             }
             "collimated" => {
-                let power = map.remove("power").unwrap().as_spectrum();
-                Emitter::Collimated {
+                let power = map.remove("power").unwrap().as_spectrum()?;
+                Ok(Emitter::Collimated {
                     to_world,
                     power,
                     sampling_weight,
-                }
+                })
             }
             "constant" => {
-                let radiance = map.remove("radiance").unwrap().as_spectrum();
-                Emitter::Constant {
+                let radiance = map.remove("radiance").unwrap().as_spectrum()?;
+                Ok(Emitter::Constant {
                     radiance,
                     sampling_weight,
-                }
+                })
             }
             "envmap" => {
-                let filename = map.remove("filename").unwrap().as_string();
-                let scale = read_value(&mut map, "scale", Value::Float(1.0)).as_float();
+                let filename = map.remove("filename").unwrap().as_string()?;
+                let scale = read_value(&mut map, "scale", Value::Float(1.0)).as_float()?;
                 let gamma = match map.remove("gamma") {
                     None => None,
-                    Some(v) => Some(v.as_float()),
+                    Some(v) => Some(v.as_float()?),
                 };
                 let cache = match map.remove("cache") {
                     None => None,
-                    Some(v) => Some(v.as_bool()),
+                    Some(v) => Some(v.as_bool()?),
                 };
-                Emitter::EnvMap {
+                Ok(Emitter::EnvMap {
                     to_world,
                     filename,
                     scale,
                     gamma,
                     cache,
                     sampling_weight,
-                }
+                })
             }
             _ => {
                 panic!("[ERROR] Uncovered {} emitter type", emitter_type);
@@ -1426,7 +1419,11 @@ pub enum Shape {
     },
 }
 impl Shape {
-    pub fn parse<R: Read>(events: &mut Events<R>, shape_type: &str, scene: &mut Scene) -> Self {
+    pub fn parse<R: Read>(
+        events: &mut Events<R>,
+        shape_type: &str,
+        scene: &mut Scene,
+    ) -> Result<Self, Error> {
         // FIXME: Can be object or references
         //  if there are references, we need to handle them
         //  differentely.
@@ -1435,27 +1432,30 @@ impl Shape {
         let mut emitter = None;
         let mut shapes = vec![];
         let mut shape = None; // Only for instance
-        let f = |events: &mut Events<R>, t: &str, attrs: HashMap<String, String>| -> bool {
+        let f = |events: &mut Events<R>,
+                 t: &str,
+                 attrs: HashMap<String, String>|
+         -> Result<bool, Error> {
             match t {
                 "bsdf" => {
                     let bsdf_type = attrs.get("type").unwrap();
-                    bsdf = Some(BSDF::parse(events, bsdf_type, scene));
+                    bsdf = Some(BSDF::parse(events, bsdf_type, scene)?);
                 }
                 "transform" => to_world = Some(Transform::parse(events)),
                 "emitter" => {
                     let emitter_type = attrs.get("type").unwrap();
-                    emitter = Some(Emitter::parse(events, emitter_type).as_area());
+                    emitter = Some(Emitter::parse(events, emitter_type)?.as_area());
                 }
                 "shape" => {
                     let shape_type = attrs.get("type").unwrap();
-                    shapes.push(Shape::parse(events, shape_type, scene));
+                    shapes.push(Shape::parse(events, shape_type, scene)?);
                 }
                 _ => panic!("Unexpected token! {}", t),
             }
-            true
+            Ok(true)
         };
 
-        let (mut map, refs) = values_fn(events, true, f);
+        let (mut map, refs) = values_fn(events, true, f)?;
         for r in refs {
             // BSDF are supported for refs without type
             if let Some(v) = scene.bsdfs.get(&r) {
@@ -1475,7 +1475,7 @@ impl Shape {
         if bsdf.is_none() {
             match map.remove("bsdf") {
                 None => {}
-                Some(v) => bsdf = Some(scene.bsdfs.get(&v.as_string()).unwrap().clone()),
+                Some(v) => bsdf = Some(scene.bsdfs.get(&v.as_ref()?).unwrap().clone()),
             }
         }
         if emitter.is_none() {
@@ -1483,7 +1483,7 @@ impl Shape {
             assert!(map.remove("emitter").is_none());
         }
 
-        let flip_normal = read_value(&mut map, "flipNormal", Value::Boolean(false)).as_bool();
+        let flip_normal = read_value(&mut map, "flipNormal", Value::Boolean(false)).as_bool()?;
 
         // Create shape option (shared across all shapes)
         let option = ShapeOption {
@@ -1494,86 +1494,86 @@ impl Shape {
         };
 
         // Read some values in advance to reduce the redundancy
-        let face_normal = read_value(&mut map, "faceNormal", Value::Boolean(false)).as_bool();
+        let face_normal = read_value(&mut map, "faceNormal", Value::Boolean(false)).as_bool()?;
         let max_smooth_angle = match map.remove("maxSmoothAngle") {
             None => None,
-            Some(v) => Some(v.as_float()),
+            Some(v) => Some(v.as_float()?),
         };
 
         match shape_type {
             "serialized" => {
-                let filename = map.remove("filename").unwrap().as_string();
+                let filename = map.remove("filename").unwrap().as_string()?;
                 let shape_index =
-                    read_value(&mut map, "shapeIndex", Value::Integer(0)).as_int() as u32;
-                Shape::Serialized(SerializedShape {
+                    read_value(&mut map, "shapeIndex", Value::Integer(0)).as_int()? as u32;
+                Ok(Shape::Serialized(SerializedShape {
                     filename,
                     shape_index,
                     face_normal,
                     max_smooth_angle,
                     option,
-                })
+                }))
             }
             "obj" => {
-                let filename = map.remove("filename").unwrap().as_string();
+                let filename = map.remove("filename").unwrap().as_string()?;
                 let flip_tex_coords =
-                    read_value(&mut map, "flipTexCoords", Value::Boolean(true)).as_bool();
-                let collapse = read_value(&mut map, "collapse", Value::Boolean(false)).as_bool();
-                Shape::Obj {
+                    read_value(&mut map, "flipTexCoords", Value::Boolean(true)).as_bool()?;
+                let collapse = read_value(&mut map, "collapse", Value::Boolean(false)).as_bool()?;
+                Ok(Shape::Obj {
                     filename,
                     face_normal,
                     max_smooth_angle,
                     flip_tex_coords,
                     collapse,
                     option,
-                }
+                })
             }
             "ply" => {
-                let filename = map.remove("filename").unwrap().as_string();
-                let srgb = read_value(&mut map, "srgb", Value::Boolean(true)).as_bool();
-                Shape::Ply {
+                let filename = map.remove("filename").unwrap().as_string()?;
+                let srgb = read_value(&mut map, "srgb", Value::Boolean(true)).as_bool()?;
+                Ok(Shape::Ply {
                     filename,
                     face_normal,
                     max_smooth_angle,
                     srgb,
                     option,
-                }
+                })
             }
-            "cube" => Shape::Cube { option },
+            "cube" => Ok(Shape::Cube { option }),
             "sphere" => {
                 let center =
                     read_value(&mut map, "center", Value::Point(Point3::new(0.0, 0.0, 0.0)))
-                        .as_point();
-                let radius = read_value(&mut map, "radius", Value::Float(1.0)).as_float();
-                Shape::Sphere {
+                        .as_point()?;
+                let radius = read_value(&mut map, "radius", Value::Float(1.0)).as_float()?;
+                Ok(Shape::Sphere {
                     center,
                     radius,
                     option,
-                }
+                })
             }
             "cylinder" => {
-                let p0 =
-                    read_value(&mut map, "p0", Value::Point(Point3::new(0.0, 0.0, 0.0))).as_point();
-                let p1 =
-                    read_value(&mut map, "p1", Value::Point(Point3::new(0.0, 0.0, 1.0))).as_point();
-                let radius = read_value(&mut map, "radius", Value::Float(1.0)).as_float();
-                Shape::Cylinder {
+                let p0 = read_value(&mut map, "p0", Value::Point(Point3::new(0.0, 0.0, 0.0)))
+                    .as_point()?;
+                let p1 = read_value(&mut map, "p1", Value::Point(Point3::new(0.0, 0.0, 1.0)))
+                    .as_point()?;
+                let radius = read_value(&mut map, "radius", Value::Float(1.0)).as_float()?;
+                Ok(Shape::Cylinder {
                     p0,
                     p1,
                     radius,
                     option,
-                }
+                })
             }
-            "rectangle" => Shape::Rectangle { option },
-            "disk" => Shape::Disk { option },
+            "rectangle" => Ok(Shape::Rectangle { option }),
+            "disk" => Ok(Shape::Disk { option }),
             "shapegroup" => {
                 assert!(option.bsdf.is_none());
                 assert!(option.to_world.is_none());
                 assert!(option.emitter.is_none());
-                Shape::ShapeGroup { shapes }
+                Ok(Shape::ShapeGroup { shapes })
             }
             "instance" => {
                 let shape = shape.unwrap();
-                Shape::Instance { shape, option }
+                Ok(Shape::Instance { shape, option })
             }
             _ => {
                 // TODO: Need to implement shapegroup and instance
@@ -1590,12 +1590,12 @@ pub struct Film {
     pub width: u32,
 }
 impl Film {
-    pub fn parse<R: Read>(events: &mut Events<R>) -> Self {
-        let (mut map, refs) = values(events, false);
+    pub fn parse<R: Read>(events: &mut Events<R>) -> Result<Self, Error> {
+        let (mut map, refs) = values(events, false)?;
         assert!(refs.is_empty());
-        let height = map.remove("height").unwrap().as_int() as u32;
-        let width = map.remove("width").unwrap().as_int() as u32;
-        Self { height, width }
+        let height = map.remove("height").unwrap().as_int()? as u32;
+        let width = map.remove("width").unwrap().as_int()? as u32;
+        Ok(Self { height, width })
     }
 }
 
@@ -1760,39 +1760,41 @@ pub struct Sensor {
     pub to_world: Transform,
 }
 impl Sensor {
-    pub fn parse<R: Read>(events: &mut Events<R>, sensor_type: &str) -> Self {
+    pub fn parse<R: Read>(events: &mut Events<R>, sensor_type: &str) -> Result<Self, Error> {
         assert_eq!(sensor_type, "perspective");
 
         // Use closure to initialize these extra stuffs
         let mut film = None;
         let mut to_world = Transform(Matrix4::one());
-        let f = |events: &mut Events<R>, t: &str, _: HashMap<String, String>| -> bool {
-            match t {
-                "film" => film = Some(Film::parse(events)),
-                "transform" => to_world = Transform::parse(events),
-                "sampler" => {
-                    println!("Skipping sampler information");
-                    skipping_entry(events);
+        let f =
+            |events: &mut Events<R>, t: &str, _: HashMap<String, String>| -> Result<bool, Error> {
+                match t {
+                    "film" => film = Some(Film::parse(events)?),
+                    "transform" => to_world = Transform::parse(events),
+                    "sampler" => {
+                        println!("Skipping sampler information");
+                        skipping_entry(events);
+                    }
+                    _ => panic!("Unexpected token!"),
                 }
-                _ => panic!("Unexpected token!"),
-            }
-            true
-        };
+                Ok(true)
+            };
 
-        let (mut map, refs) = values_fn(events, false, f);
+        let (mut map, refs) = values_fn(events, false, f)?;
         assert!(refs.is_empty());
 
         let fov = map
             .remove("fov")
             .expect("Impossible to found 'fov'")
-            .as_float();
-        let fov_axis = read_value(&mut map, "fovAxis", Value::String("x".to_string())).as_string();
-        let shutter_open = read_value(&mut map, "shutterOpen", Value::Float(0.0)).as_float();
-        let shutter_close = read_value(&mut map, "shutterClose", Value::Float(0.0)).as_float();
-        let near_clip = read_value(&mut map, "nearClip", Value::Float(0.01)).as_float();
-        let far_clip = read_value(&mut map, "farClip", Value::Float(1000.0)).as_float();
+            .as_float()?;
+        let fov_axis =
+            read_value(&mut map, "fovAxis", Value::String("x".to_string())).as_string()?;
+        let shutter_open = read_value(&mut map, "shutterOpen", Value::Float(0.0)).as_float()?;
+        let shutter_close = read_value(&mut map, "shutterClose", Value::Float(0.0)).as_float()?;
+        let near_clip = read_value(&mut map, "nearClip", Value::Float(0.01)).as_float()?;
+        let far_clip = read_value(&mut map, "farClip", Value::Float(1000.0)).as_float()?;
 
-        Self {
+        Ok(Self {
             fov,
             fov_axis,
             shutter_open,
@@ -1801,7 +1803,7 @@ impl Sensor {
             far_clip,
             film: film.unwrap(),
             to_world,
-        }
+        })
     }
 }
 
@@ -1826,7 +1828,7 @@ pub mod ply;
 #[cfg(feature = "serialized")]
 pub mod serialized;
 
-fn parse_scene(filename: &str, mut scene: &mut Scene) {
+fn parse_scene(filename: &str, mut scene: &mut Scene) -> Result<(), Error> {
     let file = File::open(filename).expect(&format!("Impossible to open {}", filename));
     let file = BufReader::new(file);
 
@@ -1846,23 +1848,23 @@ fn parse_scene(filename: &str, mut scene: &mut Scene) {
                 "bsdf" => {
                     let bsdf_type = found_attrib_panic(&attributes, "type", "bsdf");
                     let bsdf_id = found_attrib_panic(&attributes, "id", "bsdf");
-                    let bsdf = BSDF::parse(&mut iter, &bsdf_type, &mut scene);
+                    let bsdf = BSDF::parse(&mut iter, &bsdf_type, &mut scene)?;
                     scene.bsdfs.insert(bsdf_id, bsdf);
                 }
                 "texture" => {
                     let texture_id = found_attrib_panic(&attributes, "id", "texture");
                     let texture_type = found_attrib_panic(&attributes, "type", "texture");
-                    let texture = Texture::parse(&mut iter, &texture_type);
+                    let texture = Texture::parse(&mut iter, &texture_type)?;
                     scene.textures.insert(texture_id, texture);
                 }
                 "sensor" => {
                     let sensor_type = found_attrib_panic(&attributes, "type", "sensor");
-                    let sensor = Sensor::parse(&mut iter, &sensor_type);
+                    let sensor = Sensor::parse(&mut iter, &sensor_type)?;
                     scene.sensors.push(sensor);
                 }
                 "emitter" => {
                     let emitter_type = found_attrib_panic(&attributes, "type", "emitter");
-                    let emitter = Emitter::parse(&mut iter, &emitter_type);
+                    let emitter = Emitter::parse(&mut iter, &emitter_type)?;
                     scene.emitters.push(emitter);
                 }
                 "default" => {
@@ -1887,13 +1889,13 @@ fn parse_scene(filename: &str, mut scene: &mut Scene) {
                     parse_scene(
                         &filename.into_os_string().into_string().unwrap(),
                         &mut scene,
-                    );
+                    )?;
                     skipping_entry(&mut iter);
                 }
                 "shape" => {
                     let shape_type = found_attrib_panic(&attributes, "type", "shape");
                     let shape_id = found_attrib(&attributes, "id");
-                    let shape = Shape::parse(&mut iter, &shape_type, &mut scene);
+                    let shape = Shape::parse(&mut iter, &shape_type, &mut scene)?;
                     match shape_id {
                         Some(v) => {
                             scene.shapes_id.insert(v, shape);
@@ -1931,9 +1933,11 @@ fn parse_scene(filename: &str, mut scene: &mut Scene) {
             _ => {}
         }
     }
+
+    Ok(())
 }
 
-pub fn parse(file: &str) -> Scene {
+pub fn parse(file: &str) -> Result<Scene, Error> {
     let mut scene = Scene {
         bsdfs: HashMap::new(),
         textures: HashMap::new(),
@@ -1942,13 +1946,14 @@ pub fn parse(file: &str) -> Scene {
         sensors: Vec::new(),
         emitters: Vec::new(),
     };
-    parse_scene(file, &mut scene);
-    scene
+    parse_scene(file, &mut scene)?;
+    Ok(scene)
 }
 
 #[cfg(test)]
 mod tests {
-    fn print_scene(scene: crate::Scene) {
+    fn print_scene(scene: Result<crate::Scene, crate::Error>) {
+        let scene = scene.unwrap();
         println!("BSDFs");
         for (k, v) in &scene.bsdfs {
             println!(" - {} = {:?}", k, v);
