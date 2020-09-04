@@ -144,6 +144,7 @@ lazy_static! {
         m.insert("VN".to_string(), ("2.87842, 2.14604, 1.94788".to_string(), "2.83558, 2.13656, 1.64581".to_string()));
         m.insert("V_palik".to_string(), ("4.27582, 3.50453, 2.76487".to_string(), "3.50165, 2.89143, 3.10752".to_string()));
         m.insert("W".to_string(), ("4.37464, 3.29988, 2.99998".to_string(), "3.49872, 2.60604, 2.27449".to_string()));
+        m.insert("none".to_string(), ("0.0, 0.0, 0.0".to_string(), "1.0, 1.0, 1.0".to_string()));
         m
     };
 }
