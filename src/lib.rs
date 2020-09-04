@@ -630,6 +630,23 @@ pub enum Alpha {
         v: BSDFColorFloat,
     },
 }
+impl Alpha {
+    fn parse(map: &mut HashMap<String, Value>, scene: &Scene) -> Self {
+        let is_alpha = map.get("alpha").is_some();
+        if is_alpha {
+            let alpha = map.remove("alpha").unwrap().as_bsdf_color_f32(scene);
+            Alpha::Isotropic(alpha)
+        } else {
+            let u = read_value(map, "alpha_u", Value::Float(0.1)).as_bsdf_color_f32(scene);
+            let v = read_value(map, "alpha_v", Value::Float(0.1)).as_bsdf_color_f32(scene);
+            if u == v {
+                Alpha::Isotropic(u)
+            } else {
+                Alpha::Anisotropic { u, v }
+            }
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Distribution {
@@ -640,26 +657,19 @@ impl Distribution {
     fn parse(map: &mut HashMap<String, Value>, scene: &Scene) -> Self {
         let distribution =
             read_value(map, "distribution", Value::String("beckmann".to_string())).as_string();
-        let alpha = {
-            let is_alpha = map.get("alpha").is_some();
-            if is_alpha {
-                let alpha = map.remove("alpha").unwrap().as_bsdf_color_f32(scene);
-                Alpha::Isotropic(alpha)
-            } else {
-                let u = read_value(map, "alpha_u", Value::Float(0.1)).as_bsdf_color_f32(scene);
-                let v = read_value(map, "alpha_v", Value::Float(0.1)).as_bsdf_color_f32(scene);
-                if u == v {
-                    Alpha::Isotropic(u)
-                } else {
-                    Alpha::Anisotropic { u, v }
-                }
-            }
-        };
+        let alpha = Alpha::parse(map, scene);
         Self {
             distribution,
             alpha,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub enum WardVariant {
+    Ward,
+    WardDuer,
+    Balanced,
 }
 
 #[derive(Debug, Clone)]
@@ -708,6 +718,12 @@ pub enum BSDF {
     MixtureBSDF {
         weights: Vec<f32>,
         bsdfs: Vec<BSDF>,
+    },
+    Ward {
+        variant: WardVariant,                    // balanced
+        alpha: Alpha,                            // 0.1 (Iso)
+        specular_reflectance: BSDFColorSpectrum, // 0.2
+        diffuse_reflectance: BSDFColorSpectrum,  // 0.5
     },
 }
 
@@ -970,15 +986,6 @@ impl BSDF {
                 BSDF::MixtureBSDF { weights, bsdfs }
             }
             "conductor" | "roughconductor" => {
-                // Conductor {
-                //     distribution: Option<Distribution>,
-                //     // Potentially read values from materials
-                //     eta: Spectrum,
-                //     k: Spectrum,
-                //     // Other
-                //     ext_eta: f32,                            // Air
-                //     specular_reflectance: BSDFColorSpectrum, // s(1.0)
-                // },
                 let (mut map, refs) = values_fn(event, true, f_texture);
                 assert!(refs.is_empty());
                 let distribution = if bsdf_type == "roughplastic" {
@@ -1021,6 +1028,42 @@ impl BSDF {
                     k,
                     ext_eta,
                     specular_reflectance,
+                }
+            }
+            "ward" => {
+                let (mut map, refs) = values_fn(event, true, f_texture);
+                assert!(refs.is_empty());
+
+                let specular_reflectance = read_value_or_texture_spectrum(
+                    &mut map,
+                    "specularReflectance",
+                    Value::Spectrum(Spectrum::from_f32(0.2)),
+                    &textures,
+                    scene,
+                );
+                let diffuse_reflectance = read_value_or_texture_spectrum(
+                    &mut map,
+                    "diffuseReflectance",
+                    Value::Spectrum(Spectrum::from_f32(0.5)),
+                    &textures,
+                    scene,
+                );
+                let alpha = Alpha::parse(&mut map, scene);
+                let variant =
+                    read_value(&mut map, "variant", Value::String("balanced".to_string()))
+                        .as_string();
+                let variant = match &variant[..] {
+                    "balanced" => WardVariant::Balanced,
+                    "ward" => WardVariant::Ward,
+                    "ward_duer" => WardVariant::WardDuer,
+                    _ => panic!("Wrong ward variant: {}", variant),
+                };
+
+                BSDF::Ward {
+                    specular_reflectance,
+                    diffuse_reflectance,
+                    alpha,
+                    variant,
                 }
             }
             _ => panic!("Unsupported material {}", bsdf_type),
@@ -1982,6 +2025,12 @@ mod tests {
     #[test]
     fn texture_checkboard() {
         let s = "./data/veach-door.xml";
+        print_scene(crate::parse(s));
+    }
+
+    #[test]
+    fn bidir() {
+        let s = "./data/bidir.xml";
         print_scene(crate::parse(s));
     }
 
