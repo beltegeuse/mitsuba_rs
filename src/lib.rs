@@ -1694,8 +1694,8 @@ impl Transform {
                         let matrix = Matrix4::new(
                             m00, m01, m02, m03, m10, m11, m12, m13, m20, m21, m22, m23, m30, m31,
                             m32, m33,
-                        );
-                        //#[rustfmt::skip]
+                        )
+                        .transpose();
                         trans = trans * matrix;
                         opened += 1;
                     }
@@ -1709,13 +1709,12 @@ impl Transform {
                         let left = -dir.cross(up.normalize()).normalize();
                         let new_up = dir.cross(left);
 
-                        use cgmath::Transform;
+                        // use cgmath::Transform;
                         let matrix = Matrix4::new(
                             left.x, left.y, left.z, 0.0, new_up.x, new_up.y, new_up.z, 0.0, dir.x,
                             dir.y, dir.z, 0.0, origin.x, origin.y, origin.z, 1.0,
                         )
-                        .inverse_transform()
-                        .expect("inverse transform for lookat failed");
+                        .transpose();
 
                         trans = trans * matrix;
                         opened += 1;
