@@ -32,12 +32,17 @@ quick_error! {
         Value(attempt: &'static str, value: Value) {
             display("Value error: {} (value: {:?})", attempt, value)
         }
+        /// Unknown Reference
+        UnknownReference(name: String) {
+            display("Unknown reference (name: {:?})", name)
+        }
         /// Other error
         Other(err: Box<dyn std::error::Error>) {
             source(&**err)
         }
     }
 }
+type Result<T> = std::result::Result<T, Error>;
 
 lazy_static! {
     static ref IOR_DATA: HashMap<String, f32> = {
@@ -193,7 +198,7 @@ impl Spectrum {
         Self { value: s }
     }
 
-    pub fn as_rgb(self) -> Result<RGB, Error> {
+    pub fn as_rgb(self) -> Result<RGB> {
         // Mitsuba allow to give RGB values that can be true spectrum
         // where values are defined for wavelenght.
         // We do not support yet transformation between these spectrum
@@ -271,7 +276,7 @@ pub enum Value {
 macro_rules! value_as {
     ( $name:ident, $value:path => $target:ty ) => {
         impl Value {
-            pub fn $name(self) -> Result<$target, Error> {
+            pub fn $name(self) -> Result<$target> {
                 match self {
                     $value(s) => Ok(s),
                     _ => Err(Error::Value(stringify!($name), self)),
@@ -380,8 +385,9 @@ fn skipping_entry<R: Read>(events: &mut Events<R>) {
     let mut opened = 1;
     for e in events {
         match e {
-            Ok(XmlEvent::StartElement { name, .. }) => {
-                println!("[WARN] skipping_entry {}", name);
+            Ok(XmlEvent::StartElement { .. }) => {
+                // We might want to be verbose to debug
+                // println!("[WARN] skipping_entry {}", name);
                 opened += 1;
             }
             Ok(XmlEvent::EndElement { .. }) => {
@@ -398,14 +404,29 @@ fn skipping_entry<R: Read>(events: &mut Events<R>) {
     }
 }
 
+fn match_value_or_defaults(value: String, defaults: &HashMap<String, String>) -> Result<String> {
+    if value.is_empty() {
+        Ok(value)
+    } else {
+        match value.chars().nth(0).unwrap() {
+            '$' => match defaults.get(value.get(1..).unwrap()) {
+                Some(v) => Ok(v.clone()),
+                None => Err(Error::UnknownReference(value.get(1..).unwrap().to_string())),
+            },
+            _ => Ok(value),
+        }
+    }
+}
+
 // Return values and list of unamed id
 fn values_fn<R: Read, F>(
     events: &mut Events<R>,
+    defaults: &HashMap<String, String>,
     strict: bool,
     mut other: F,
-) -> Result<(HashMap<String, Value>, Vec<String>), Error>
+) -> Result<(HashMap<String, Value>, Vec<String>)>
 where
-    F: FnMut(&mut Events<R>, &str, HashMap<String, String>) -> Result<bool, Error>,
+    F: FnMut(&mut Events<R>, &str, HashMap<String, String>) -> Result<bool>,
 {
     let mut map = HashMap::new();
     let mut refs = Vec::new();
@@ -424,6 +445,7 @@ where
                 "float" => {
                     let name = found_attrib_panic(&attributes, "name", "float");
                     let value = found_attrib_panic(&attributes, "value", "float");
+                    let value = match_value_or_defaults(value, defaults)?;
                     let value = value
                         .parse::<f32>()
                         .expect(&format!("Impossible to convert {} to f32", value));
@@ -433,6 +455,7 @@ where
                 "integer" => {
                     let name = found_attrib_panic(&attributes, "name", "integer");
                     let value = found_attrib_panic(&attributes, "value", "integer");
+                    let value = match_value_or_defaults(value, defaults)?;
                     let value = value
                         .parse::<i32>()
                         .expect(&format!("Impossible to convert {} to i32", value));
@@ -442,6 +465,7 @@ where
                 "boolean" => {
                     let name = found_attrib_panic(&attributes, "name", "boolean");
                     let value = found_attrib_panic(&attributes, "value", "boolean");
+                    let value = match_value_or_defaults(value, defaults)?;
                     if value != "true" && value != "false" {
                         panic!(
                             "The boolean param '{}' with value '{}' is not a boolean",
@@ -455,18 +479,21 @@ where
                 "spectrum" => {
                     let name = found_attrib_panic(&attributes, "name", "spectrum");
                     let value = found_attrib_panic(&attributes, "value", "spectrum");
+                    let value = match_value_or_defaults(value, defaults)?;
                     map.insert(name, Value::Spectrum(Spectrum { value }));
                     opened = true;
                 }
                 "rgb" => {
                     let name = found_attrib_panic(&attributes, "name", "rgb");
                     let value = found_attrib_panic(&attributes, "value", "rgb");
+                    let value = match_value_or_defaults(value, defaults)?;
                     map.insert(name, Value::Spectrum(Spectrum::from_rgb(value)));
                     opened = true;
                 }
                 "ref" => {
                     let name = found_attrib(&attributes, "name");
                     let value = found_attrib_panic(&attributes, "id", "ref");
+                    let value = match_value_or_defaults(value, defaults)?;
                     match name {
                         Some(v) => {
                             map.insert(v, Value::Ref(value));
@@ -514,6 +541,7 @@ where
                 "string" => {
                     let name = found_attrib_panic(&attributes, "name", "string");
                     let value = found_attrib_panic(&attributes, "value", "string");
+                    let value = match_value_or_defaults(value, defaults)?;
                     map.insert(name, Value::String(value));
                     opened = true;
                 }
@@ -528,7 +556,8 @@ where
                         if strict {
                             panic!("{:?} encounter when parsing values", name)
                         } else {
-                            println!("[WARN] {:?} is skipped", name);
+                            // If we need to debug...
+                            // println!("[WARN] {:?} is skipped", name);
                             skipping_entry(iter);
                         }
                     }
@@ -553,10 +582,11 @@ where
 
 fn values<R: Read>(
     events: &mut Events<R>,
+    defaults: &HashMap<String, String>,
     strict: bool,
-) -> Result<(HashMap<String, Value>, Vec<String>), Error> {
+) -> Result<(HashMap<String, Value>, Vec<String>)> {
     let f = |_: &mut Events<R>, _: &str, _: HashMap<String, String>| Ok(false);
-    values_fn(events, strict, f)
+    values_fn(events, defaults, strict, f)
 }
 
 fn read_value(m: &mut HashMap<String, Value>, n: &str, d: Value) -> Value {
@@ -630,7 +660,7 @@ pub struct Distribution {
     pub alpha: Alpha,
 }
 impl Distribution {
-    fn parse(map: &mut HashMap<String, Value>, scene: &Scene) -> Result<Self, Error> {
+    fn parse(map: &mut HashMap<String, Value>, scene: &Scene) -> Result<Self> {
         let distribution =
             read_value(map, "distribution", Value::String("beckmann".to_string())).as_string()?;
         let alpha = Alpha::parse(map, scene);
@@ -711,37 +741,36 @@ impl BSDF {
     }
     pub fn parse<R: Read>(
         event: &mut Events<R>,
+        defaults: &HashMap<String, String>,
         bsdf_type: &str,
         scene: &mut Scene,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self> {
         // Helpers for catch textures
         let mut textures = HashMap::new();
-        let f_texture = |events: &mut Events<R>,
-                         t: &str,
-                         attrs: HashMap<String, String>|
-         -> Result<bool, Error> {
-            match t {
-                "texture" => {
-                    let texture_name = attrs.get("name").unwrap();
-                    let texture_type = attrs.get("type").unwrap();
+        let f_texture =
+            |events: &mut Events<R>, t: &str, attrs: HashMap<String, String>| -> Result<bool> {
+                match t {
+                    "texture" => {
+                        let texture_name = attrs.get("name").unwrap();
+                        let texture_type = attrs.get("type").unwrap();
 
-                    let texture_id = attrs.get("id");
-                    let texture = Texture::parse(events, &texture_type)?;
-                    textures.insert(texture_name.clone(), texture.clone());
-                    if let Some(id) = texture_id {
-                        // If there is an id, we need to include it
-                        // to the map for futher uses
-                        scene.textures.insert(id.to_string(), texture);
+                        let texture_id = attrs.get("id");
+                        let texture = Texture::parse(events, defaults, &texture_type)?;
+                        textures.insert(texture_name.clone(), texture.clone());
+                        if let Some(id) = texture_id {
+                            // If there is an id, we need to include it
+                            // to the map for futher uses
+                            scene.textures.insert(id.to_string(), texture);
+                        }
                     }
+                    _ => panic!("Twosided encounter unexpected token {:?}", t),
                 }
-                _ => panic!("Twosided encounter unexpected token {:?}", t),
-            }
-            Ok(true)
-        };
+                Ok(true)
+            };
 
         match bsdf_type {
             "phong" => {
-                let (mut map, refs) = values_fn(event, true, f_texture)?;
+                let (mut map, refs) = values_fn(event, defaults, true, f_texture)?;
                 assert!(refs.is_empty());
                 let exponent = read_value_or_texture_f32(
                     &mut map,
@@ -771,7 +800,7 @@ impl BSDF {
                 })
             }
             "diffuse" => {
-                let (mut map, refs) = values_fn(event, true, f_texture)?;
+                let (mut map, refs) = values_fn(event, defaults, true, f_texture)?;
                 assert!(refs.is_empty());
 
                 let reflectance = read_value_or_texture_spectrum(
@@ -800,7 +829,7 @@ impl BSDF {
                 Ok(BSDF::Diffuse { reflectance })
             }
             "dielectric" | "roughdielectric" | "thindielectric" => {
-                let (mut map, refs) = values_fn(event, true, f_texture)?;
+                let (mut map, refs) = values_fn(event, defaults, true, f_texture)?;
                 assert!(refs.is_empty());
                 let distribution = if bsdf_type == "roughdielectric" {
                     Some(Distribution::parse(&mut map, scene)?)
@@ -843,17 +872,17 @@ impl BSDF {
                 let f = |events: &mut Events<R>,
                          t: &str,
                          attrs: HashMap<String, String>|
-                 -> Result<bool, Error> {
+                 -> Result<bool> {
                     match t {
                         "bsdf" => {
                             let bsdf_type = attrs.get("type").unwrap();
-                            bsdfs.push(BSDF::parse(events, bsdf_type, scene)?);
+                            bsdfs.push(BSDF::parse(events, defaults, bsdf_type, scene)?);
                         }
                         _ => panic!("Twosided encounter unexpected token {:?}", t),
                     }
                     Ok(true)
                 };
-                let (map, refs) = values_fn(event, true, f)?;
+                let (map, refs) = values_fn(event, defaults, true, f)?;
                 assert!(refs.is_empty());
                 assert!(map.is_empty());
                 assert_eq!(bsdfs.len(), 1);
@@ -863,7 +892,7 @@ impl BSDF {
                 })
             }
             "roughplastic" | "plastic" => {
-                let (mut map, refs) = values_fn(event, true, f_texture)?;
+                let (mut map, refs) = values_fn(event, defaults, true, f_texture)?;
                 assert!(refs.is_empty());
                 let distribution = if bsdf_type == "roughplastic" {
                     Some(Distribution::parse(&mut map, scene)?)
@@ -907,7 +936,7 @@ impl BSDF {
                 })
             }
             "roughdiffuse" => {
-                let (mut map, refs) = values_fn(event, true, f_texture)?;
+                let (mut map, refs) = values_fn(event, defaults, true, f_texture)?;
                 assert!(refs.is_empty());
                 let reflectance = read_value_or_texture_spectrum(
                     &mut map,
@@ -938,17 +967,17 @@ impl BSDF {
                 let f = |events: &mut Events<R>,
                          t: &str,
                          attrs: HashMap<String, String>|
-                 -> Result<bool, Error> {
+                 -> Result<bool> {
                     match t {
                         "bsdf" => {
                             let bsdf_type = attrs.get("type").unwrap();
-                            bsdfs.push(BSDF::parse(events, bsdf_type, scene)?);
+                            bsdfs.push(BSDF::parse(events, defaults, bsdf_type, scene)?);
                         }
                         _ => panic!("Twosided encounter unexpected token {:?}", t),
                     }
                     Ok(true)
                 };
-                let (mut map, refs) = values_fn(event, true, f)?;
+                let (mut map, refs) = values_fn(event, defaults, true, f)?;
                 assert!(refs.is_empty());
 
                 // Parse the weights
@@ -977,7 +1006,7 @@ impl BSDF {
                 Ok(BSDF::MixtureBSDF { weights, bsdfs })
             }
             "conductor" | "roughconductor" => {
-                let (mut map, refs) = values_fn(event, true, f_texture)?;
+                let (mut map, refs) = values_fn(event, defaults, true, f_texture)?;
                 assert!(refs.is_empty());
                 let distribution = if bsdf_type == "roughplastic" {
                     Some(Distribution::parse(&mut map, scene)?)
@@ -1022,7 +1051,7 @@ impl BSDF {
                 })
             }
             "ward" => {
-                let (mut map, refs) = values_fn(event, true, f_texture)?;
+                let (mut map, refs) = values_fn(event, defaults, true, f_texture)?;
                 assert!(refs.is_empty());
 
                 let specular_reflectance = read_value_or_texture_spectrum(
@@ -1102,8 +1131,12 @@ pub enum Texture {
     },
 }
 impl Texture {
-    pub fn parse<R: Read>(events: &mut Events<R>, texture_type: &str) -> Result<Self, Error> {
-        let (mut map, refs) = values(events, true)?;
+    pub fn parse<R: Read>(
+        events: &mut Events<R>,
+        defaults: &HashMap<String, String>,
+        texture_type: &str,
+    ) -> Result<Self> {
+        let (mut map, refs) = values(events, defaults, true)?;
         assert!(refs.is_empty());
 
         // Read offset and scale
@@ -1224,19 +1257,22 @@ pub enum Emitter {
     },
 }
 impl Emitter {
-    pub fn parse<R: Read>(events: &mut Events<R>, emitter_type: &str) -> Result<Self, Error> {
+    pub fn parse<R: Read>(
+        events: &mut Events<R>,
+        defaults: &HashMap<String, String>,
+        emitter_type: &str,
+    ) -> Result<Self> {
         let mut to_world = Transform(Matrix4::one());
         // TODO: Texture
-        let f =
-            |events: &mut Events<R>, t: &str, _: HashMap<String, String>| -> Result<bool, Error> {
-                match t {
-                    "transform" => to_world = Transform::parse(events),
-                    _ => panic!("Unexpected token!"),
-                }
-                Ok(true)
-            };
+        let f = |events: &mut Events<R>, t: &str, _: HashMap<String, String>| -> Result<bool> {
+            match t {
+                "transform" => to_world = Transform::parse(events),
+                _ => panic!("Unexpected token!"),
+            }
+            Ok(true)
+        };
 
-        let (mut map, refs) = values_fn(events, true, f)?;
+        let (mut map, refs) = values_fn(events, defaults, true, f)?;
         assert!(refs.is_empty());
 
         let sampling_weight =
@@ -1422,9 +1458,10 @@ pub enum Shape {
 impl Shape {
     pub fn parse<R: Read>(
         events: &mut Events<R>,
+        defaults: &HashMap<String, String>,
         shape_type: &str,
         scene: &mut Scene,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self> {
         // FIXME: Can be object or references
         //  if there are references, we need to handle them
         //  differentely.
@@ -1433,30 +1470,27 @@ impl Shape {
         let mut emitter = None;
         let mut shapes = vec![];
         let mut shape = None; // Only for instance
-        let f = |events: &mut Events<R>,
-                 t: &str,
-                 attrs: HashMap<String, String>|
-         -> Result<bool, Error> {
+        let f = |events: &mut Events<R>, t: &str, attrs: HashMap<String, String>| -> Result<bool> {
             match t {
                 "bsdf" => {
                     let bsdf_type = attrs.get("type").unwrap();
-                    bsdf = Some(BSDF::parse(events, bsdf_type, scene)?);
+                    bsdf = Some(BSDF::parse(events, defaults, bsdf_type, scene)?);
                 }
                 "transform" => to_world = Some(Transform::parse(events)),
                 "emitter" => {
                     let emitter_type = attrs.get("type").unwrap();
-                    emitter = Some(Emitter::parse(events, emitter_type)?.as_area());
+                    emitter = Some(Emitter::parse(events, defaults, emitter_type)?.as_area());
                 }
                 "shape" => {
                     let shape_type = attrs.get("type").unwrap();
-                    shapes.push(Shape::parse(events, shape_type, scene)?);
+                    shapes.push(Shape::parse(events, defaults, shape_type, scene)?);
                 }
                 _ => panic!("Unexpected token! {}", t),
             }
             Ok(true)
         };
 
-        let (mut map, refs) = values_fn(events, true, f)?;
+        let (mut map, refs) = values_fn(events, defaults, true, f)?;
         for r in refs {
             // BSDF are supported for refs without type
             if let Some(v) = scene.bsdfs.get(&r) {
@@ -1591,8 +1625,11 @@ pub struct Film {
     pub width: u32,
 }
 impl Film {
-    pub fn parse<R: Read>(events: &mut Events<R>) -> Result<Self, Error> {
-        let (mut map, refs) = values(events, false)?;
+    pub fn parse<R: Read>(
+        events: &mut Events<R>,
+        defaults: &HashMap<String, String>,
+    ) -> Result<Self> {
+        let (mut map, refs) = values(events, defaults, false)?;
         assert!(refs.is_empty());
         let height = map.remove("height").unwrap().as_int()? as u32;
         let width = map.remove("width").unwrap().as_int()? as u32;
@@ -1760,27 +1797,30 @@ pub struct Sensor {
     pub to_world: Transform,
 }
 impl Sensor {
-    pub fn parse<R: Read>(events: &mut Events<R>, sensor_type: &str) -> Result<Self, Error> {
+    pub fn parse<R: Read>(
+        events: &mut Events<R>,
+        defaults: &HashMap<String, String>,
+        sensor_type: &str,
+    ) -> Result<Self> {
         assert_eq!(sensor_type, "perspective");
 
         // Use closure to initialize these extra stuffs
         let mut film = None;
         let mut to_world = Transform(Matrix4::one());
-        let f =
-            |events: &mut Events<R>, t: &str, _: HashMap<String, String>| -> Result<bool, Error> {
-                match t {
-                    "film" => film = Some(Film::parse(events)?),
-                    "transform" => to_world = Transform::parse(events),
-                    "sampler" => {
-                        println!("Skipping sampler information");
-                        skipping_entry(events);
-                    }
-                    _ => panic!("Unexpected token!"),
+        let f = |events: &mut Events<R>, t: &str, _: HashMap<String, String>| -> Result<bool> {
+            match t {
+                "film" => film = Some(Film::parse(events, defaults)?),
+                "transform" => to_world = Transform::parse(events),
+                "sampler" => {
+                    // Sampler is not necessary to parse
+                    skipping_entry(events);
                 }
-                Ok(true)
-            };
+                _ => panic!("Unexpected token!"),
+            }
+            Ok(true)
+        };
 
-        let (mut map, refs) = values_fn(events, false, f)?;
+        let (mut map, refs) = values_fn(events, defaults, false, f)?;
         assert!(refs.is_empty());
 
         let fov = map
@@ -1828,11 +1868,12 @@ pub mod ply;
 #[cfg(feature = "serialized")]
 pub mod serialized;
 
-fn parse_scene(filename: &str, mut scene: &mut Scene) -> Result<(), Error> {
+fn parse_scene(filename: &str, mut scene: &mut Scene) -> Result<()> {
     let file = File::open(filename).expect(&format!("Impossible to open {}", filename));
     let file = BufReader::new(file);
 
     let parser = EventReader::new(file);
+    let mut defaults = HashMap::new();
 
     let mut iter = parser.into_iter();
     loop {
@@ -1848,28 +1889,30 @@ fn parse_scene(filename: &str, mut scene: &mut Scene) -> Result<(), Error> {
                 "bsdf" => {
                     let bsdf_type = found_attrib_panic(&attributes, "type", "bsdf");
                     let bsdf_id = found_attrib_panic(&attributes, "id", "bsdf");
-                    let bsdf = BSDF::parse(&mut iter, &bsdf_type, &mut scene)?;
+                    let bsdf = BSDF::parse(&mut iter, &defaults, &bsdf_type, &mut scene)?;
                     scene.bsdfs.insert(bsdf_id, bsdf);
                 }
                 "texture" => {
                     let texture_id = found_attrib_panic(&attributes, "id", "texture");
                     let texture_type = found_attrib_panic(&attributes, "type", "texture");
-                    let texture = Texture::parse(&mut iter, &texture_type)?;
+                    let texture = Texture::parse(&mut iter, &defaults, &texture_type)?;
                     scene.textures.insert(texture_id, texture);
                 }
                 "sensor" => {
                     let sensor_type = found_attrib_panic(&attributes, "type", "sensor");
-                    let sensor = Sensor::parse(&mut iter, &sensor_type)?;
+                    let sensor = Sensor::parse(&mut iter, &defaults, &sensor_type)?;
                     scene.sensors.push(sensor);
                 }
                 "emitter" => {
                     let emitter_type = found_attrib_panic(&attributes, "type", "emitter");
-                    let emitter = Emitter::parse(&mut iter, &emitter_type)?;
+                    let emitter = Emitter::parse(&mut iter, &defaults, &emitter_type)?;
                     scene.emitters.push(emitter);
                 }
                 "default" => {
-                    println!("[WARN] default are ignored");
-                    skipping_entry(&mut iter);
+                    // name="faceNormalsFlag" value="false"/>
+                    let name = found_attrib_panic(&attributes, "name", "default");
+                    let value = found_attrib_panic(&attributes, "value", "default");
+                    defaults.insert(name, value);
                 }
                 "scene" => {
                     // Nothing to do
@@ -1895,7 +1938,7 @@ fn parse_scene(filename: &str, mut scene: &mut Scene) -> Result<(), Error> {
                 "shape" => {
                     let shape_type = found_attrib_panic(&attributes, "type", "shape");
                     let shape_id = found_attrib(&attributes, "id");
-                    let shape = Shape::parse(&mut iter, &shape_type, &mut scene)?;
+                    let shape = Shape::parse(&mut iter, &defaults, &shape_type, &mut scene)?;
                     match shape_id {
                         Some(v) => {
                             scene.shapes_id.insert(v, shape);
@@ -1937,7 +1980,7 @@ fn parse_scene(filename: &str, mut scene: &mut Scene) -> Result<(), Error> {
     Ok(())
 }
 
-pub fn parse(file: &str) -> Result<Scene, Error> {
+pub fn parse(file: &str) -> Result<Scene> {
     let mut scene = Scene {
         bsdfs: HashMap::new(),
         textures: HashMap::new(),
