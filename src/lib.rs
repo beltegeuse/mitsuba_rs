@@ -36,6 +36,10 @@ quick_error! {
         UnknownReference(name: String) {
             display("Unknown reference (name: {:?})", name)
         }
+        /// Attribute not found
+        AttribNotFound(name: String, additional_info: String) {
+            display("Impossible to found {} attribute when parsing {}", name, additional_info)
+        }
         /// Other error
         Other(err: Box<dyn std::error::Error>) {
             source(&**err)
@@ -336,20 +340,20 @@ fn found_attrib(attrs: &Vec<xml::attribute::OwnedAttribute>, name: &str) -> Opti
     None
 }
 
-fn found_attrib_panic(
+fn found_attrib_or_error(
     attrs: &Vec<xml::attribute::OwnedAttribute>,
     name: &str,
     additional_info: &str,
-) -> String {
+) -> Result<String> {
     for a in attrs {
         if a.name.local_name == name {
-            return a.value.clone();
+            return Ok(a.value.clone());
         }
     }
-    panic!(
-        "Impossible to found {} attribute when parsing {}",
-        name, additional_info
-    );
+    Err(Error::AttribNotFound(
+        name.to_string(),
+        additional_info.to_string(),
+    ))
 }
 
 fn found_attrib_or(
@@ -443,8 +447,8 @@ where
                 name, attributes, ..
             }) => match name.local_name.as_str() {
                 "float" => {
-                    let name = found_attrib_panic(&attributes, "name", "float");
-                    let value = found_attrib_panic(&attributes, "value", "float");
+                    let name = found_attrib_or_error(&attributes, "name", "float")?;
+                    let value = found_attrib_or_error(&attributes, "value", "float")?;
                     let value = match_value_or_defaults(value, defaults)?;
                     let value = value
                         .parse::<f32>()
@@ -453,8 +457,8 @@ where
                     opened = true;
                 }
                 "integer" => {
-                    let name = found_attrib_panic(&attributes, "name", "integer");
-                    let value = found_attrib_panic(&attributes, "value", "integer");
+                    let name = found_attrib_or_error(&attributes, "name", "integer")?;
+                    let value = found_attrib_or_error(&attributes, "value", "integer")?;
                     let value = match_value_or_defaults(value, defaults)?;
                     let value = value
                         .parse::<i32>()
@@ -463,8 +467,8 @@ where
                     opened = true;
                 }
                 "boolean" => {
-                    let name = found_attrib_panic(&attributes, "name", "boolean");
-                    let value = found_attrib_panic(&attributes, "value", "boolean");
+                    let name = found_attrib_or_error(&attributes, "name", "boolean")?;
+                    let value = found_attrib_or_error(&attributes, "value", "boolean")?;
                     let value = match_value_or_defaults(value, defaults)?;
                     if value != "true" && value != "false" {
                         panic!(
@@ -477,22 +481,22 @@ where
                     opened = true;
                 }
                 "spectrum" => {
-                    let name = found_attrib_panic(&attributes, "name", "spectrum");
-                    let value = found_attrib_panic(&attributes, "value", "spectrum");
+                    let name = found_attrib_or_error(&attributes, "name", "spectrum")?;
+                    let value = found_attrib_or_error(&attributes, "value", "spectrum")?;
                     let value = match_value_or_defaults(value, defaults)?;
                     map.insert(name, Value::Spectrum(Spectrum { value }));
                     opened = true;
                 }
                 "rgb" => {
-                    let name = found_attrib_panic(&attributes, "name", "rgb");
-                    let value = found_attrib_panic(&attributes, "value", "rgb");
+                    let name = found_attrib_or_error(&attributes, "name", "rgb")?;
+                    let value = found_attrib_or_error(&attributes, "value", "rgb")?;
                     let value = match_value_or_defaults(value, defaults)?;
                     map.insert(name, Value::Spectrum(Spectrum::from_rgb(value)));
                     opened = true;
                 }
                 "ref" => {
                     let name = found_attrib(&attributes, "name");
-                    let value = found_attrib_panic(&attributes, "id", "ref");
+                    let value = found_attrib_or_error(&attributes, "id", "ref")?;
                     let value = match_value_or_defaults(value, defaults)?;
                     match name {
                         Some(v) => {
@@ -505,7 +509,7 @@ where
                     opened = true;
                 }
                 "vector" => {
-                    let name = found_attrib_panic(&attributes, "name", "vector");
+                    let name = found_attrib_or_error(&attributes, "name", "vector")?;
                     let x = found_attrib(&attributes, "x")
                         .unwrap_or("0.0".to_string())
                         .parse::<f32>()
@@ -522,7 +526,7 @@ where
                     opened = true;
                 }
                 "point" => {
-                    let name = found_attrib_panic(&attributes, "name", "point");
+                    let name = found_attrib_or_error(&attributes, "name", "point")?;
                     let x = found_attrib(&attributes, "x")
                         .unwrap_or("0.0".to_string())
                         .parse::<f32>()
@@ -539,8 +543,8 @@ where
                     opened = true;
                 }
                 "string" => {
-                    let name = found_attrib_panic(&attributes, "name", "string");
-                    let value = found_attrib_panic(&attributes, "value", "string");
+                    let name = found_attrib_or_error(&attributes, "name", "string")?;
+                    let value = found_attrib_or_error(&attributes, "value", "string")?;
                     let value = match_value_or_defaults(value, defaults)?;
                     map.insert(name, Value::String(value));
                     opened = true;
@@ -1208,6 +1212,70 @@ pub struct AreaEmitter {
 }
 
 #[derive(Debug)]
+pub struct SunEmitterParam {
+    pub scale: f32,
+    pub radius_scale: f32,
+}
+
+#[derive(Debug)]
+pub struct SkyEmitterParam {
+    pub scale: f32,
+    pub stretch: f32,     // f32 [1-2], 1.0
+    pub albedo: Spectrum, // 0.15
+}
+
+#[derive(Debug)]
+pub enum SunDirection {
+    Vector(Vector3<f32>),
+    DateAndPos {
+        year: i32,      // i32 2010
+        month: i32,     // i32 07
+        day: i32,       // i32 10
+        hour: f32,      // f32 15
+        minute: f32,    // f32 0
+        second: f32,    // f32 0
+        latitude: f32,  // f32 35.6894
+        longitude: f32, // f32 139.6917
+        timezone: f32,  // f32 9
+    },
+}
+impl SunDirection {
+    pub fn parse(
+        mut map: &mut HashMap<String, Value>,
+        _defaults: &HashMap<String, String>,
+    ) -> Result<Self> {
+        let sun_direction = map.remove("sunDirection");
+        if let Some(sun_direction) = sun_direction {
+            Ok(SunDirection::Vector(sun_direction.as_vec()?))
+        } else {
+            // Date
+            let year = read_value(&mut map, "year", Value::Integer(2010)).as_int()?;
+            let month = read_value(&mut map, "month", Value::Integer(10)).as_int()?;
+            let day = read_value(&mut map, "day", Value::Integer(10)).as_int()?;
+            // Time
+            let hour = read_value(&mut map, "hour", Value::Float(15.0)).as_float()?;
+            let minute = read_value(&mut map, "minute", Value::Float(0.0)).as_float()?;
+            let second = read_value(&mut map, "second", Value::Float(0.0)).as_float()?;
+            // Pos on earth
+            let latitude = read_value(&mut map, "latitude", Value::Float(35.6894)).as_float()?;
+            let longitude = read_value(&mut map, "longitude", Value::Float(139.6917)).as_float()?;
+            let timezone = read_value(&mut map, "timezone", Value::Float(9.0)).as_float()?;
+            Ok(SunDirection::DateAndPos {
+                year,
+                month,
+                day,
+                hour,
+                minute,
+                second,
+                latitude,
+                longitude,
+                timezone,
+            })
+        }
+    }
+}
+
+#[derive(Debug)]
 pub enum Emitter {
     // Area light
     // (kinda special as Mesh will have ref to it)
@@ -1254,6 +1322,16 @@ pub enum Emitter {
         gamma: Option<f32>,   // Optional (or automatic)
         cache: Option<bool>,  // Optional (or automatic)
         sampling_weight: f32, // 1
+    },
+    // SunSky, Sun or Sky
+    SunSky {
+        turbidity: f32,       // f32 [1-10], default 3
+        resolution: u32,      // u32 512
+        sampling_weight: f32, // f32 1.0
+        sun_direction: SunDirection,
+        sun: Option<SunEmitterParam>,
+        sky: Option<SkyEmitterParam>,
+        // toWorld -> Not supported
     },
 }
 impl Emitter {
@@ -1372,6 +1450,83 @@ impl Emitter {
                     scale,
                     gamma,
                     cache,
+                    sampling_weight,
+                })
+            }
+            "sunsky" | "sun" | "sky" => {
+                let turbidity = read_value(&mut map, "turbidity", Value::Float(3.0)).as_float()?;
+                let resolution =
+                    read_value(&mut map, "turbidity", Value::Integer(512)).as_int()? as u32;
+                let sun_direction = SunDirection::parse(&mut map, defaults)?;
+                let (sun, sky) = match emitter_type {
+                    "sun" => {
+                        let scale = read_value(&mut map, "scale", Value::Float(1.0)).as_float()?;
+                        let radius_scale =
+                            read_value(&mut map, "sunRadiusScale", Value::Float(1.0)).as_float()?;
+                        (
+                            Some(SunEmitterParam {
+                                scale,
+                                radius_scale,
+                            }),
+                            None,
+                        )
+                    }
+                    "sky" => {
+                        let scale = read_value(&mut map, "scale", Value::Float(1.0)).as_float()?;
+                        let stretch =
+                            read_value(&mut map, "stretch", Value::Float(1.0)).as_float()?;
+                        let albedo = read_value(
+                            &mut map,
+                            "stretch",
+                            Value::Spectrum(Spectrum::from_f32(0.15)),
+                        )
+                        .as_spectrum()?;
+                        (
+                            None,
+                            Some(SkyEmitterParam {
+                                scale,
+                                stretch,
+                                albedo,
+                            }),
+                        )
+                    }
+                    "sunsky" => {
+                        // Sky
+                        let sky_scale =
+                            read_value(&mut map, "skyScale", Value::Float(1.0)).as_float()?;
+                        let stretch =
+                            read_value(&mut map, "stretch", Value::Float(1.0)).as_float()?;
+                        let albedo = read_value(
+                            &mut map,
+                            "stretch",
+                            Value::Spectrum(Spectrum::from_f32(0.15)),
+                        )
+                        .as_spectrum()?;
+                        // Sun
+                        let sun_scale =
+                            read_value(&mut map, "sunScale", Value::Float(1.0)).as_float()?;
+                        let radius_scale =
+                            read_value(&mut map, "sunRadiusScale", Value::Float(1.0)).as_float()?;
+                        (
+                            Some(SunEmitterParam {
+                                scale: sun_scale,
+                                radius_scale,
+                            }),
+                            Some(SkyEmitterParam {
+                                scale: sky_scale,
+                                stretch,
+                                albedo,
+                            }),
+                        )
+                    }
+                    _ => unimplemented!(),
+                };
+                Ok(Emitter::SunSky {
+                    turbidity,
+                    resolution,
+                    sun_direction,
+                    sun,
+                    sky,
                     sampling_weight,
                 })
             }
@@ -1887,31 +2042,31 @@ fn parse_scene(filename: &str, mut scene: &mut Scene) -> Result<()> {
                 name, attributes, ..
             }) => match name.local_name.as_str() {
                 "bsdf" => {
-                    let bsdf_type = found_attrib_panic(&attributes, "type", "bsdf");
-                    let bsdf_id = found_attrib_panic(&attributes, "id", "bsdf");
+                    let bsdf_type = found_attrib_or_error(&attributes, "type", "bsdf")?;
+                    let bsdf_id = found_attrib_or_error(&attributes, "id", "bsdf")?;
                     let bsdf = BSDF::parse(&mut iter, &defaults, &bsdf_type, &mut scene)?;
                     scene.bsdfs.insert(bsdf_id, bsdf);
                 }
                 "texture" => {
-                    let texture_id = found_attrib_panic(&attributes, "id", "texture");
-                    let texture_type = found_attrib_panic(&attributes, "type", "texture");
+                    let texture_id = found_attrib_or_error(&attributes, "id", "texture")?;
+                    let texture_type = found_attrib_or_error(&attributes, "type", "texture")?;
                     let texture = Texture::parse(&mut iter, &defaults, &texture_type)?;
                     scene.textures.insert(texture_id, texture);
                 }
                 "sensor" => {
-                    let sensor_type = found_attrib_panic(&attributes, "type", "sensor");
+                    let sensor_type = found_attrib_or_error(&attributes, "type", "sensor")?;
                     let sensor = Sensor::parse(&mut iter, &defaults, &sensor_type)?;
                     scene.sensors.push(sensor);
                 }
                 "emitter" => {
-                    let emitter_type = found_attrib_panic(&attributes, "type", "emitter");
+                    let emitter_type = found_attrib_or_error(&attributes, "type", "emitter")?;
                     let emitter = Emitter::parse(&mut iter, &defaults, &emitter_type)?;
                     scene.emitters.push(emitter);
                 }
                 "default" => {
                     // name="faceNormalsFlag" value="false"/>
-                    let name = found_attrib_panic(&attributes, "name", "default");
-                    let value = found_attrib_panic(&attributes, "value", "default");
+                    let name = found_attrib_or_error(&attributes, "name", "default")?;
+                    let value = found_attrib_or_error(&attributes, "value", "default")?;
                     defaults.insert(name, value);
                 }
                 "scene" => {
@@ -1924,7 +2079,7 @@ fn parse_scene(filename: &str, mut scene: &mut Scene) -> Result<()> {
                 }
                 "include" => {
                     // Read a new file
-                    let other_filename = found_attrib_panic(&attributes, "filename", "include");
+                    let other_filename = found_attrib_or_error(&attributes, "filename", "include")?;
                     let filename = std::path::Path::new(filename)
                         .parent()
                         .unwrap()
@@ -1936,7 +2091,7 @@ fn parse_scene(filename: &str, mut scene: &mut Scene) -> Result<()> {
                     skipping_entry(&mut iter);
                 }
                 "shape" => {
-                    let shape_type = found_attrib_panic(&attributes, "type", "shape");
+                    let shape_type = found_attrib_or_error(&attributes, "type", "shape")?;
                     let shape_id = found_attrib(&attributes, "id");
                     let shape = Shape::parse(&mut iter, &defaults, &shape_type, &mut scene)?;
                     match shape_id {
@@ -1950,7 +2105,7 @@ fn parse_scene(filename: &str, mut scene: &mut Scene) -> Result<()> {
                 }
                 "ply" => {
                     // This flag is from Mitsuba2 (exporter from blender)
-                    let filename = found_attrib_panic(&attributes, "filename", "ply");
+                    let filename = found_attrib_or_error(&attributes, "filename", "ply")?;
                     scene.shapes_unamed.push(Shape::Ply {
                         filename,
                         face_normal: false,
