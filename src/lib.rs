@@ -1012,28 +1012,28 @@ impl BSDF {
             "conductor" | "roughconductor" => {
                 let (mut map, refs) = values_fn(event, defaults, true, f_texture)?;
                 assert!(refs.is_empty());
-                let distribution = if bsdf_type == "roughplastic" {
+                let distribution = if bsdf_type == "roughconductor" {
                     Some(Distribution::parse(&mut map, scene)?)
                 } else {
                     None
                 };
 
-                let (eta, k) = match map.remove("material") {
-                    None => {
-                        // Read from the fields
-                        let eta = map.remove("eta").unwrap().as_spectrum()?;
-                        let k = map.remove("k").unwrap().as_spectrum()?;
-                        (eta, k)
-                    }
-                    Some(v) => {
-                        let v = v.as_string()?;
-                        let (eta, k) = MATERIALS.get(&v).unwrap();
-                        (
-                            Spectrum { value: eta.clone() },
-                            Spectrum { value: k.clone() },
-                        )
-                    }
-                };
+                // Load the material or eta/k
+                let material_name = map
+                    .remove("material")
+                    .unwrap_or(Value::String("Cu".to_owned()))
+                    .as_string()?;
+                let (eta, k) = MATERIALS.get(&material_name).unwrap();
+                let (eta, k) = (
+                    match map.remove("eta") {
+                        None => Spectrum { value: eta.clone() },
+                        Some(v) => v.as_spectrum()?,
+                    },
+                    match map.remove("k") {
+                        None => Spectrum { value: k.clone() },
+                        Some(v) => v.as_spectrum()?,
+                    },
+                );
 
                 let ext_eta =
                     read_value(&mut map, "extEta", Value::String("air".to_string())).as_ior();
