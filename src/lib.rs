@@ -1545,12 +1545,89 @@ impl Emitter {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum PhaseFunction {
+    Isotropic,
+    HG { g: f32 },
+}
+
+impl PhaseFunction {
+    pub fn parse<R: Read>(
+        events: &mut Events<R>,
+        defaults: &HashMap<String, String>,
+        phase_type: &str,
+    ) -> Result<Self> {
+        let (_, refs) = values(events, defaults, true)?;
+        assert!(refs.is_empty());
+        match phase_type {
+            "isotropic" => Ok(PhaseFunction::Isotropic),
+            _ => panic!("[ERROR] Uncovered {} phasefunction type", phase_type),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum Medium {
+    // TODO: Add material looking
+    Homogenous {
+        sigma_a: Spectrum,
+        sigma_s: Spectrum,
+        scale: f32,
+        phase: PhaseFunction,
+    }, //TODO: Add heterogenous
+}
+
+impl Medium {
+    pub fn parse<R: Read>(
+        events: &mut Events<R>,
+        defaults: &HashMap<String, String>,
+        medium_type: &str,
+    ) -> Result<Self> {
+        let mut phase = None;
+        let f = |events: &mut Events<R>, t: &str, attrs: HashMap<String, String>| -> Result<bool> {
+            match t {
+                "phase" => {
+                    let phase_type = attrs.get("type").unwrap();
+                    phase = Some(PhaseFunction::parse(events, defaults, phase_type)?);
+                }
+                _ => panic!("Unexpected token!"),
+            }
+            Ok(true)
+        };
+        let (mut map, refs) = values_fn(events, defaults, true, f)?;
+
+        assert!(refs.is_empty());
+        let phase = phase.unwrap_or(PhaseFunction::Isotropic);
+        match medium_type {
+            "homogeneous" => {
+                let sigma_a =
+                    read_value(&mut map, "sigmaA", Value::Spectrum(Spectrum::from_f32(1.0)))
+                        .as_spectrum()?;
+                let sigma_s =
+                    read_value(&mut map, "sigmaS", Value::Spectrum(Spectrum::from_f32(1.0)))
+                        .as_spectrum()?;
+                let scale = read_value(&mut map, "scale", Value::Float(1.0)).as_float()?;
+
+                Ok(Medium::Homogenous {
+                    sigma_a,
+                    sigma_s,
+                    scale,
+                    phase,
+                })
+            }
+            _ => panic!("[ERROR] Uncovered {} medium type", medium_type),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct ShapeOption {
     pub flip_normal: bool, // false
     pub bsdf: Option<BSDF>,
     pub to_world: Option<Transform>,
     pub emitter: Option<AreaEmitter>,
+    pub interior: Option<Medium>,
+    pub exterior: Option<Medium>,
 }
 
 #[derive(Debug)]
@@ -1625,6 +1702,7 @@ impl Shape {
         let mut emitter = None;
         let mut shapes = vec![];
         let mut shape = None; // Only for instance
+
         let f = |events: &mut Events<R>, t: &str, attrs: HashMap<String, String>| -> Result<bool> {
             match t {
                 "bsdf" => {
@@ -1675,12 +1753,24 @@ impl Shape {
 
         let flip_normal = read_value(&mut map, "flipNormal", Value::Boolean(false)).as_bool()?;
 
+        // Convert to Medium
+        let interior = map.remove("interior").map(|v| {
+            let v = v.as_ref().unwrap();
+            scene.medium.get(&v).unwrap().clone()
+        });
+        let exterior = map.remove("exterior").map(|v| {
+            let v = v.as_ref().unwrap();
+            scene.medium.get(&v).unwrap().clone()
+        });
+
         // Create shape option (shared across all shapes)
         let option = ShapeOption {
             flip_normal,
             bsdf,
             to_world,
             emitter,
+            interior,
+            exterior,
         };
 
         // Read some values in advance to reduce the redundancy
@@ -1891,7 +1981,7 @@ impl Transform {
                         trans = trans * matrix;
                         opened += 1;
                     }
-                    "lookat" => {
+                    "lookAt" | "lookat" => {
                         let origin = found_attrib_vec(&attributes, "origin").unwrap();
                         let target = found_attrib_vec(&attributes, "target").unwrap();
                         let up = found_attrib_vec(&attributes, "up").unwrap();
@@ -2009,6 +2099,7 @@ pub struct Scene {
     pub shapes_unamed: Vec<Shape>,
     pub sensors: Vec<Sensor>,
     pub emitters: Vec<Emitter>,
+    pub medium: HashMap<String, Medium>,
 }
 impl Scene {
     // TODO:
@@ -2076,6 +2167,12 @@ fn parse_scene(filename: &str, mut scene: &mut Scene) -> Result<()> {
                     // as for scene parsing, it gives us no information
                     skipping_entry(&mut iter);
                 }
+                "medium" => {
+                    let medium_id = found_attrib_or_error(&attributes, "id", "texture")?;
+                    let medium_type = found_attrib_or_error(&attributes, "type", "texture")?;
+                    let medium = Medium::parse(&mut iter, &defaults, &medium_type)?;
+                    scene.medium.insert(medium_id, medium);
+                }
                 "include" => {
                     // Read a new file
                     let other_filename = found_attrib_or_error(&attributes, "filename", "include")?;
@@ -2115,6 +2212,8 @@ fn parse_scene(filename: &str, mut scene: &mut Scene) -> Result<()> {
                             bsdf: None,
                             to_world: None,
                             emitter: None,
+                            interior: None,
+                            exterior: None,
                         },
                     });
                 }
@@ -2142,6 +2241,7 @@ pub fn parse(file: &str) -> Result<Scene> {
         shapes_unamed: Vec::new(),
         sensors: Vec::new(),
         emitters: Vec::new(),
+        medium: HashMap::new(),
     };
     parse_scene(file, &mut scene)?;
     Ok(scene)

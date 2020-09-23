@@ -213,6 +213,8 @@ mod tests {
                 bsdf: None,
                 to_world: None,
                 emitter: None,
+                interior: None,
+                exterior: None,
             },
         };
         let wk = std::path::Path::new(".");
@@ -232,6 +234,8 @@ mod tests {
                     bsdf: None,
                     to_world: None,
                     emitter: None,
+                    interior: None,
+                    exterior: None,
                 },
             };
             let wk = std::path::Path::new(".");
