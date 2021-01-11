@@ -11,7 +11,7 @@ serialized = ["miniz_oxide", "byteorder", "bitflags"]
 
 [dependencies]
 xml-rs = "0.8"
-cgmath = "0.17" # TODO: Think to remove this dependencies
+cgmath = "0.18" # TODO: Think to remove this dependencies
 lazy_static = "1.4"
 quick-error = "2.0.0"
 miniz_oxide = { version = "0.4", optional = true }

@@ -1973,9 +1973,12 @@ impl Transform {
                         let m31 = values[13];
                         let m32 = values[14];
                         let m33 = values[15];
+                        #[rustfmt::skip]
                         let matrix = Matrix4::new(
-                            m00, m01, m02, m03, m10, m11, m12, m13, m20, m21, m22, m23, m30, m31,
-                            m32, m33,
+                            m00, m01, m02, m03, 
+                            m10, m11, m12, m13, 
+                            m20, m21, m22, m23, 
+                            m30, m31, m32, m33,
                         );
 
                         trans = trans * matrix;
