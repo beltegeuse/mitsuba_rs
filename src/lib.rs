@@ -1557,10 +1557,14 @@ impl PhaseFunction {
         defaults: &HashMap<String, String>,
         phase_type: &str,
     ) -> Result<Self> {
-        let (_, refs) = values(events, defaults, true)?;
+        let (mut map, refs) = values(events, defaults, true)?;
         assert!(refs.is_empty());
         match phase_type {
             "isotropic" => Ok(PhaseFunction::Isotropic),
+            "hg" => {
+                let g = read_value(&mut map, "g", Value::Float(0.8)).as_float()?;
+                Ok(PhaseFunction::HG { g })
+            }
             _ => panic!("[ERROR] Uncovered {} phasefunction type", phase_type),
         }
     }
@@ -1998,7 +2002,8 @@ impl Transform {
                         let matrix = Matrix4::new(
                             left.x, left.y, left.z, 0.0, new_up.x, new_up.y, new_up.z, 0.0, dir.x,
                             dir.y, dir.z, 0.0, origin.x, origin.y, origin.z, 1.0,
-                        ).transpose();
+                        )
+                        .transpose();
 
                         trans = trans * matrix;
                         opened += 1;
