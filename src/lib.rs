@@ -1287,6 +1287,14 @@ pub enum Emitter {
         intensity: Spectrum,  // 1
         sampling_weight: f32, // 1
     },
+    // Point light with normal
+    PointNormal {
+        to_world: Transform,
+        position: Point3<f32>,
+        normal: Vector3<f32>,
+        intensity: Spectrum,  // 1
+        sampling_weight: f32, // 1
+    },
     // Spotlight
     Spot {
         to_world: Transform, // Id
@@ -1374,6 +1382,23 @@ impl Emitter {
                 Ok(Emitter::Point {
                     to_world,
                     position,
+                    intensity,
+                    sampling_weight,
+                })
+            }
+            "point-normal" => {
+                let position = map.remove("position").unwrap().as_point()?;
+                let normal = map.remove("normal").unwrap().as_vec()?;
+                let intensity = read_value(
+                    &mut map,
+                    "intensity",
+                    Value::Spectrum(Spectrum::from_f32(1.0)),
+                )
+                .as_spectrum()?;
+                Ok(Emitter::PointNormal {
+                    to_world,
+                    position,
+                    normal,
                     intensity,
                     sampling_weight,
                 })
