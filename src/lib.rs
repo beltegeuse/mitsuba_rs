@@ -735,6 +735,10 @@ pub enum BSDF {
         specular_reflectance: BSDFColorSpectrum, // 0.2
         diffuse_reflectance: BSDFColorSpectrum,  // 0.5
     },
+    Mask {
+        opacity: BSDFColorSpectrum,
+        bsdf: Box<BSDF>,
+    },
 }
 
 impl BSDF {
@@ -869,6 +873,36 @@ impl BSDF {
                     specular_transmittance,
                     thin,
                 })
+            }
+            "mask" => {
+                // Read the child element
+                let mut bsdfs = vec![];
+                let f = |events: &mut Events<R>,
+                         t: &str,
+                         attrs: HashMap<String, String>|
+                 -> Result<bool> {
+                    match t {
+                        "bsdf" => {
+                            let bsdf_type = attrs.get("type").unwrap();
+                            bsdfs.push(BSDF::parse(events, defaults, bsdf_type, scene)?);
+                        }
+                        _ => panic!("Twosided encounter unexpected token {:?}", t),
+                    }
+                    Ok(true)
+                };
+                let (mut map, refs) = values_fn(event, defaults, true, f)?;
+                assert_eq!(bsdfs.len(), 1);
+                assert!(refs.is_empty());
+ 
+                let opacity = read_value_or_texture_spectrum(
+                    &mut map,
+                    "opacity",
+                    Value::Spectrum(Spectrum::from_f32(1.0)),
+                    &textures,
+                    scene,
+                );
+ 
+                Ok(BSDF::Mask { opacity, bsdf: Box::new(bsdfs[0].clone()) })
             }
             "twosided" => {
                 // We need to parse the next element, including BSDF
