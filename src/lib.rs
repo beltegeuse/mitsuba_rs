@@ -988,7 +988,7 @@ impl BSDF {
                 let weights = map.remove("weights").unwrap().as_string()?;
                 let weights = {
                     let trimed = weights.trim();
-                    let splitted = if trimed.clone().split(",").count() > 1 {
+                    let splitted = if trimed.split(",").count() > 1 {
                         trimed.split(",")
                     } else {
                         trimed.split(" ")

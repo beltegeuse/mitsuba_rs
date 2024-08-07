@@ -95,7 +95,7 @@ pub struct PlyLoaded {
 }
 
 pub fn read_ply(filename: &std::path::Path) -> PlyLoaded {
-    let f = match std::fs::File::open(filename.clone()) {
+    let f = match std::fs::File::open(filename) {
         Ok(f) => f,
         Err(e) => {
             panic!("Error in opening: {:?} => {:?}", filename, e);
