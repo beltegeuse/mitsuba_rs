@@ -886,12 +886,17 @@ impl BSDF {
                             let bsdf_type = attrs.get("type").unwrap();
                             bsdfs.push(BSDF::parse(events, defaults, bsdf_type, scene)?);
                         }
-                        _ => panic!("Twosided encounter unexpected token {:?}", t),
+                        _ => {},
                     }
                     Ok(true)
                 };
                 let (mut map, refs) = values_fn(event, defaults, true, f)?;
-                assert_eq!(bsdfs.len(), 1);
+                let bsdf = if bsdfs.is_empty() {
+                    println!("[WARN] Mask BSDF is empty, using default");
+                    BSDF::default()
+                } else {
+                    bsdfs[0].clone()
+                };
                 assert!(refs.is_empty());
  
                 let opacity = read_value_or_texture_spectrum(
@@ -902,7 +907,7 @@ impl BSDF {
                     scene,
                 );
  
-                Ok(BSDF::Mask { opacity, bsdf: Box::new(bsdfs[0].clone()) })
+                Ok(BSDF::Mask { opacity, bsdf: Box::new(bsdf) })
             }
             "twosided" => {
                 // We need to parse the next element, including BSDF
@@ -1799,7 +1804,7 @@ impl Shape {
                 continue;
             }
 
-            todo!();
+            println!("Ignore reference for shape: {}",r);
         }
 
         // Try to fill things that missing
@@ -2199,16 +2204,16 @@ fn parse_scene(filename: &str, mut scene: &mut Scene) -> Result<()> {
                 name, attributes, ..
             }) => match name.local_name.as_str() {
                 "bsdf" => {
-                    let bsdf_type = found_attrib_or_error(&attributes, "type", "bsdf")?;
-                    let bsdf_id = found_attrib_or_error(&attributes, "id", "bsdf")?;
-                    let bsdf = BSDF::parse(&mut iter, &defaults, &bsdf_type, &mut scene)?;
-                    scene.bsdfs.insert(bsdf_id, bsdf);
+                    // let bsdf_type = found_attrib_or_error(&attributes, "type", "bsdf")?;
+                    // let bsdf_id = found_attrib_or_error(&attributes, "id", "bsdf")?;
+                    // let bsdf = BSDF::parse(&mut iter, &defaults, &bsdf_type, &mut scene)?;
+                    // scene.bsdfs.insert(bsdf_id, bsdf);
                 }
                 "texture" => {
-                    let texture_id = found_attrib_or_error(&attributes, "id", "texture")?;
-                    let texture_type = found_attrib_or_error(&attributes, "type", "texture")?;
-                    let texture = Texture::parse(&mut iter, &defaults, &texture_type)?;
-                    scene.textures.insert(texture_id, texture);
+                    // let texture_id = found_attrib_or_error(&attributes, "id", "texture")?;
+                    // let texture_type = found_attrib_or_error(&attributes, "type", "texture")?;
+                    // let texture = Texture::parse(&mut iter, &defaults, &texture_type)?;
+                    // scene.textures.insert(texture_id, texture);
                 }
                 "sensor" => {
                     let sensor_type = found_attrib_or_error(&attributes, "type", "sensor")?;
@@ -2284,7 +2289,7 @@ fn parse_scene(filename: &str, mut scene: &mut Scene) -> Result<()> {
                         },
                     });
                 }
-                _ => panic!("Unsupported primitive type {} {:?}", name, attributes),
+                _ => println!("Unsupported primitive type {} {:?}", name, attributes),
             },
             Ok(XmlEvent::EndElement { .. }) => {
                 // TODO: Might want to check the type in case...
