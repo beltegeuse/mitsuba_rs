@@ -15,6 +15,7 @@ extern crate ply_rs;
 extern crate quick_error;
 
 use cgmath::*;
+use log::warn;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader;
@@ -2204,16 +2205,22 @@ fn parse_scene(filename: &str, mut scene: &mut Scene) -> Result<()> {
                 name, attributes, ..
             }) => match name.local_name.as_str() {
                 "bsdf" => {
-                    // let bsdf_type = found_attrib_or_error(&attributes, "type", "bsdf")?;
-                    // let bsdf_id = found_attrib_or_error(&attributes, "id", "bsdf")?;
-                    // let bsdf = BSDF::parse(&mut iter, &defaults, &bsdf_type, &mut scene)?;
-                    // scene.bsdfs.insert(bsdf_id, bsdf);
+                    let bsdf_type = found_attrib_or_error(&attributes, "type", "bsdf")?;
+                    let bsdf_id = found_attrib_or_error(&attributes, "id", "bsdf");
+                    if bsdf_id.is_err() {
+                        skipping_entry(&mut iter);
+                        warn!("Skipping bsdf without id {:?}", bsdf_type);
+                        continue;
+                    }
+                    let bsdf_id = bsdf_id.unwrap();
+                    let bsdf = BSDF::parse(&mut iter, &defaults, &bsdf_type, &mut scene)?;
+                    scene.bsdfs.insert(bsdf_id, bsdf);
                 }
                 "texture" => {
-                    // let texture_id = found_attrib_or_error(&attributes, "id", "texture")?;
-                    // let texture_type = found_attrib_or_error(&attributes, "type", "texture")?;
-                    // let texture = Texture::parse(&mut iter, &defaults, &texture_type)?;
-                    // scene.textures.insert(texture_id, texture);
+                    let texture_id = found_attrib_or_error(&attributes, "id", "texture")?;
+                    let texture_type = found_attrib_or_error(&attributes, "type", "texture")?;
+                    let texture = Texture::parse(&mut iter, &defaults, &texture_type)?;
+                    scene.textures.insert(texture_id, texture);
                 }
                 "sensor" => {
                     let sensor_type = found_attrib_or_error(&attributes, "type", "sensor")?;
