@@ -1799,7 +1799,7 @@ impl Shape {
                 continue;
             }
 
-            todo!();
+            // todo!();
         }
 
         // Try to fill things that missing
@@ -2200,7 +2200,12 @@ fn parse_scene(filename: &str, mut scene: &mut Scene) -> Result<()> {
             }) => match name.local_name.as_str() {
                 "bsdf" => {
                     let bsdf_type = found_attrib_or_error(&attributes, "type", "bsdf")?;
-                    let bsdf_id = found_attrib_or_error(&attributes, "id", "bsdf")?;
+                    let bsdf_id = found_attrib_or_error(&attributes, "id", "bsdf");
+                    if bsdf_id.is_err() {
+                        skipping_entry(&mut iter);
+                        continue;
+                    }
+                    let bsdf_id = bsdf_id.unwrap();
                     let bsdf = BSDF::parse(&mut iter, &defaults, &bsdf_type, &mut scene)?;
                     scene.bsdfs.insert(bsdf_id, bsdf);
                 }
