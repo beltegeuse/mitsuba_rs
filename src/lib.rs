@@ -13,6 +13,8 @@ extern crate bitflags;
 extern crate ply_rs;
 #[macro_use]
 extern crate quick_error;
+#[macro_use]
+extern crate log;
 
 use cgmath::*;
 use log::warn;
@@ -20,6 +22,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader;
 use std::io::Read;
+use std::os::macos;
 use xml::reader::{EventReader, Events, XmlEvent};
 
 quick_error! {
@@ -1093,6 +1096,11 @@ impl BSDF {
                     ext_eta,
                     specular_reflectance,
                 })
+            }
+            "null" => {
+                // Nothing to do
+                warn!("Null BSDF encountered");
+                Ok(BSDF::default())
             }
             "ward" => {
                 let (mut map, refs) = values_fn(event, defaults, true, f_texture)?;
