@@ -100,7 +100,7 @@ fn export_obj(scene_info: mitsuba_rs::Scene, wk: &Path) {
                 writeln!(file, "o Unamed_{}", i).unwrap();
                 // Write the position
                 for p in mesh.points.iter() {
-                    let p = mat.transform_point(*p);
+                    // let p = mat.transform_point(*p);
                     writeln!(file, "v {} {} {}", p.x, p.y, p.z).unwrap();
                 }
                 file.write_all(b"\n").unwrap();
